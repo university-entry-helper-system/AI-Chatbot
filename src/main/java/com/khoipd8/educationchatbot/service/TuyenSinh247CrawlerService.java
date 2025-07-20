@@ -33,7 +33,7 @@ public class TuyenSinh247CrawlerService {
     @Autowired
     private UniversityRepository universityRepository;
     
-    // 1. Discover universities from main page
+    // 1. Discover universities (unchanged)
     public List<UniversityInfo> discoverUniversities() throws IOException {
         log.info("Discovering universities from main page...");
         
@@ -44,8 +44,6 @@ public class TuyenSinh247CrawlerService {
                 .get();
         
         List<UniversityInfo> universities = new ArrayList<>();
-        
-        // Find all links to university benchmark pages
         Elements universityLinks = doc.select("a[href*='/diem-chuan/'][href*='.html']");
         
         for (Element link : universityLinks) {
@@ -64,7 +62,6 @@ public class TuyenSinh247CrawlerService {
             }
         }
         
-        // Remove duplicates based on code
         Map<String, UniversityInfo> uniqueUniversities = universities.stream()
                 .collect(Collectors.toMap(
                     UniversityInfo::getCode,
@@ -77,7 +74,7 @@ public class TuyenSinh247CrawlerService {
         return result;
     }
     
-    // 2. Crawl detailed data for a specific university
+    // 2. Fixed crawl university details
     public University crawlUniversityDetails(UniversityInfo info) throws IOException {
         log.info("Crawling university: {} ({})", info.getName(), info.getCode());
         
@@ -90,103 +87,405 @@ public class TuyenSinh247CrawlerService {
         university.setName(info.getName());
         university.setCode(info.getCode());
         university.setFullName(extractFullName(doc, info.getName()));
-        university.setLocation(extractLocation(doc));
-        university.setType("Công lập"); // Default, can be improved
+        
+        // Fixed location extraction
+        university.setLocation(extractLocationFixed(doc, info.getName()));
+        university.setType("Công lập");
         university.setDescription(extractDescription(doc));
         
-        // Crawl programs from tables
-        List<Program> programs = crawlPrograms(doc, university);
+        // Fixed program crawling
+        List<Program> programs = crawlProgramsFixed(doc, university);
         university.setPrograms(programs);
         
-        log.info("Crawled {} programs for {}", programs.size(), university.getName());
+        log.info("Crawled {} programs for {} with scores", programs.size(), university.getName());
+        logScoreStats(programs);
         
         return university;
     }
     
-    // 3. Extract programs from HTML tables
-    private List<Program> crawlPrograms(Document doc, University university) {
-        List<Program> programs = new ArrayList<>();
+    // 3. Fixed program extraction - Parse HTML table correctly
+    private List<Program> crawlProgramsFixed(Document doc, University university) {
+        Map<String, Program> programMap = new HashMap<>();
         
-        // Find all tables containing benchmark data
+        // Strategy: Look for tables with specific structure
         Elements tables = doc.select("table");
         
-        for (Element table : tables) {
-            Elements rows = table.select("tbody tr");
-            if (rows.isEmpty()) {
-                rows = table.select("tr");
-            }
+        log.debug("Found {} tables on page", tables.size());
+        
+        for (int i = 0; i < tables.size(); i++) {
+            Element table = tables.get(i);
             
-            for (Element row : rows) {
-                Elements cells = row.select("td");
-                if (cells.size() >= 3) {
-                    Program program = extractProgramFromRow(cells, university);
-                    if (program != null) {
-                        programs.add(program);
-                    }
-                }
+            // Check if this table contains benchmark data
+            if (isScoreTable(table)) {
+                log.debug("Processing score table #{}", i + 1);
+                
+                // Determine context (year, method) from surrounding elements
+                String context = getTableContext(table);
+                Integer year = extractYearFromContext(context, table);
+                String method = extractMethodFromContext(context, table);
+                
+                log.debug("Table context: year={}, method={}, context='{}'", year, method, context);
+                
+                // Process table rows
+                processScoreTable(table, university, programMap, year, method);
             }
         }
+        
+        List<Program> programs = new ArrayList<>(programMap.values());
+        log.info("Extracted {} unique programs", programs.size());
         
         return programs;
     }
     
-    // 4. Extract program data from table row
-    private Program extractProgramFromRow(Elements cells, University university) {
-        try {
-            Program program = new Program();
-            program.setUniversity(university);
-            
-            // Column 0: Program name
-            String programName = cells.get(0).text().trim();
-            if (programName.isEmpty() || 
-                programName.toLowerCase().contains("tên ngành") ||
-                programName.toLowerCase().contains("ngành") && programName.length() < 5) {
-                return null; // Skip header rows
+    // 4. Check if table contains score data
+    private boolean isScoreTable(Element table) {
+        // Check table headers
+        Elements headers = table.select("th, thead td");
+        String headerText = headers.text().toLowerCase();
+        
+        // Check for typical score table headers
+        if (headerText.contains("tên ngành") && 
+            (headerText.contains("điểm chuẩn") || headerText.contains("điểm"))) {
+            return true;
+        }
+        
+        // Check first few rows for score patterns
+        Elements rows = table.select("tbody tr, tr");
+        for (int i = 0; i < Math.min(3, rows.size()); i++) {
+            Elements cells = rows.get(i).select("td");
+            if (cells.size() >= 3) {
+                String secondCol = cells.get(1).text().trim();
+                String thirdCol = cells.get(2).text().trim();
+                
+                // Check for subject combination pattern (A00, A01, etc.)
+                if (secondCol.matches(".*[ABCD]\\d{2}.*") && isScoreValue(thirdCol)) {
+                    return true;
+                }
             }
-            program.setName(programName);
+        }
+        
+        return false;
+    }
+    
+    // 5. Process score table
+    private void processScoreTable(Element table, University university, 
+                                 Map<String, Program> programMap, 
+                                 Integer year, String method) {
+        
+        Elements rows = table.select("tbody tr");
+        if (rows.isEmpty()) {
+            rows = table.select("tr");
+        }
+        
+        int processedRows = 0;
+        int scoreRows = 0;
+        
+        for (Element row : rows) {
+            Elements cells = row.select("td");
             
-            // Column 1: Subject combination
-            if (cells.size() > 1) {
-                String subjectCombination = cells.get(1).text().trim();
-                program.setSubjectCombination(subjectCombination);
-            }
-            
-            // Column 2: Benchmark score
-            if (cells.size() > 2) {
+            if (cells.size() >= 3) {
+                String programName = cells.get(0).text().trim();
+                String combination = cells.get(1).text().trim();
                 String scoreText = cells.get(2).text().trim();
-                Double score = parseScore(scoreText);
-                program.setBenchmarkScore2024(score);
+                String note = cells.size() > 3 ? cells.get(3).text().trim() : "";
+                
+                // Skip header rows
+                if (isHeaderRow(programName)) {
+                    continue;
+                }
+                
+                // Parse score
+                Double score = parseScoreFixed(scoreText);
+                
+                if (score != null && !programName.isEmpty()) {
+                    String programKey = createProgramKey(programName, note, method);
+                    
+                    Program program = programMap.computeIfAbsent(programKey, k -> {
+                        Program p = new Program();
+                        p.setUniversity(university);
+                        p.setName(programName);
+                        p.setSubjectCombination(combination);
+                        p.setNote(note);
+                        p.setAdmissionMethod(method != null ? method : "Xét tuyển kết hợp");
+                        return p;
+                    });
+                    
+                    // Assign score to correct year
+                    assignScoreToYear(program, score, year != null ? year : 2024);
+                    scoreRows++;
+                }
+                processedRows++;
             }
-            
-            // Column 3: Notes (admission method, special programs)
-            if (cells.size() > 3) {
-                String note = cells.get(3).text().trim();
-                program.setNote(note);
-                program.setAdmissionMethod(extractAdmissionMethod(note));
-            }
-            
-            // Set default admission method if not found
-            if (program.getAdmissionMethod() == null || program.getAdmissionMethod().isEmpty()) {
-                program.setAdmissionMethod("Xét tuyển kết hợp");
-            }
-            
-            return program;
-            
-        } catch (Exception e) {
-            log.warn("Error extracting program from row: {}", e.getMessage());
+        }
+        
+        log.debug("Processed {} rows, found {} with valid scores", processedRows, scoreRows);
+    }
+    
+    // 6. Enhanced score parsing
+    private Double parseScoreFixed(String scoreText) {
+        if (scoreText == null || scoreText.trim().isEmpty()) {
             return null;
+        }
+        
+        // Remove all non-numeric characters except dots
+        String cleaned = scoreText.replaceAll("[^0-9.]", "");
+        
+        if (cleaned.isEmpty()) {
+            return null;
+        }
+        
+        try {
+            double score = Double.parseDouble(cleaned);
+            
+            // Validate score range (typical university entrance scores)
+            if (score >= 0 && score <= 100) {
+                return Math.round(score * 100.0) / 100.0; // Round to 2 decimal places
+            }
+            
+        } catch (NumberFormatException e) {
+            log.debug("Failed to parse score: '{}'", scoreText);
+        }
+        
+        return null;
+    }
+    
+    // 7. Check if value looks like a score
+    private boolean isScoreValue(String text) {
+        if (text == null || text.trim().isEmpty()) {
+            return false;
+        }
+        
+        String cleaned = text.replaceAll("[^0-9.]", "");
+        if (cleaned.isEmpty()) {
+            return false;
+        }
+        
+        try {
+            double value = Double.parseDouble(cleaned);
+            return value >= 10 && value <= 100; // Reasonable score range
+        } catch (NumberFormatException e) {
+            return false;
         }
     }
     
-    // 5. Async method to crawl all universities
+    // 8. Enhanced location extraction
+    private String extractLocationFixed(Document doc, String universityName) {
+        // Priority 1: Extract from university name
+        String nameLocation = extractLocationFromName(universityName);
+        if (nameLocation != null) {
+            return nameLocation;
+        }
+        
+        // Priority 2: Extract from full text content
+        String fullText = doc.text().toLowerCase();
+        
+        // Check for specific location keywords
+        if (fullText.contains("tp.hcm") || fullText.contains("thành phố hồ chí minh") || 
+            fullText.contains("hồ chí minh") || fullText.contains("sài gòn")) {
+            return "TP.HCM";
+        }
+        
+        if (fullText.contains("hà nội") || fullText.contains("hanoi")) {
+            return "Hà Nội";
+        }
+        
+        if (fullText.contains("đà nẵng")) return "Đà Nẵng";
+        if (fullText.contains("hải phòng")) return "Hải Phòng";
+        if (fullText.contains("cần thơ")) return "Cần Thơ";
+        if (fullText.contains("huế")) return "Huế";
+        if (fullText.contains("quảng ninh")) return "Quảng Ninh";
+        if (fullText.contains("nghệ an")) return "Nghệ An";
+        
+        return "Chưa xác định";
+    }
+    
+    // 9. Extract location from university name
+    private String extractLocationFromName(String name) {
+        if (name == null) return null;
+        
+        String lowerName = name.toLowerCase();
+        
+        if (lowerName.contains("hcm") || lowerName.contains("tp.hcm") || 
+            lowerName.contains("sài gòn") || lowerName.contains("hồ chí minh")) {
+            return "TP.HCM";
+        }
+        
+        if (lowerName.contains("hà nội") || lowerName.contains("thủ đô")) {
+            return "Hà Nội";
+        }
+        
+        if (lowerName.contains("đà nẵng")) return "Đà Nẵng";
+        if (lowerName.contains("huế")) return "Huế";
+        if (lowerName.contains("cần thơ")) return "Cần Thơ";
+        
+        return null;
+    }
+    
+    // 10. Enhanced context extraction
+    private String getTableContext(Element table) {
+        StringBuilder context = new StringBuilder();
+        
+        // Look at preceding elements (headings, paragraphs)
+        Element current = table.previousElementSibling();
+        int lookback = 0;
+        
+        while (current != null && lookback < 5) {
+            String text = current.text().trim();
+            if (!text.isEmpty()) {
+                if (current.tagName().matches("h[1-6]")) {
+                    context.insert(0, text + " ");
+                    break; // Stop at first heading
+                } else {
+                    context.insert(0, text + " ");
+                }
+            }
+            current = current.previousElementSibling();
+            lookback++;
+        }
+        
+        return context.toString();
+    }
+    
+    // 11. Extract year from context
+    private Integer extractYearFromContext(String context, Element table) {
+        if (context != null) {
+            Pattern yearPattern = Pattern.compile("\\b(202[2-5])\\b");
+            Matcher matcher = yearPattern.matcher(context);
+            if (matcher.find()) {
+                return Integer.parseInt(matcher.group(1));
+            }
+        }
+        
+        // Check table content for year clues
+        String tableText = table.text();
+        if (tableText.contains("2024")) return 2024;
+        if (tableText.contains("2023")) return 2023;
+        if (tableText.contains("2022")) return 2022;
+        
+        return 2024; // Default to 2024
+    }
+    
+    // 12. Extract method from context
+    private String extractMethodFromContext(String context, Element table) {
+        if (context != null) {
+            String lowerContext = context.toLowerCase();
+            
+            if (lowerContext.contains("xét tuyển kết hợp")) return "Xét tuyển kết hợp";
+            if (lowerContext.contains("điểm thi thpt")) return "Điểm thi THPT";
+            if (lowerContext.contains("đgnl")) return "Đánh giá năng lực";
+            if (lowerContext.contains("học bạ")) return "Xét học bạ";
+            if (lowerContext.contains("đánh giá tư duy")) return "Đánh giá tư duy";
+        }
+        
+        return "Xét tuyển kết hợp"; // Default
+    }
+    
+    // Helper methods (unchanged but optimized)
+    private void assignScoreToYear(Program program, Double score, Integer year) {
+        switch (year) {
+            case 2024:
+                if (program.getBenchmarkScore2024() == null) {
+                    program.setBenchmarkScore2024(score);
+                }
+                break;
+            case 2023:
+                if (program.getBenchmarkScore2023() == null) {
+                    program.setBenchmarkScore2023(score);
+                }
+                break;
+            case 2022:
+                if (program.getBenchmarkScore2022() == null) {
+                    program.setBenchmarkScore2022(score);
+                }
+                break;
+            default:
+                if (program.getBenchmarkScore2024() == null) {
+                    program.setBenchmarkScore2024(score);
+                }
+                break;
+        }
+    }
+    
+    private String createProgramKey(String name, String note, String method) {
+        return name + "|" + (note != null ? note : "") + "|" + (method != null ? method : "");
+    }
+    
+    private boolean isHeaderRow(String text) {
+        if (text == null) return true;
+        
+        String lowerText = text.toLowerCase();
+        return lowerText.contains("tên ngành") || 
+               lowerText.contains("chuyên ngành") ||
+               lowerText.contains("ngành") && text.length() < 10 ||
+               lowerText.contains("mã ngành") ||
+               text.trim().isEmpty();
+    }
+    
+    private void logScoreStats(List<Program> programs) {
+        long with2024 = programs.stream().filter(p -> p.getBenchmarkScore2024() != null).count();
+        long with2023 = programs.stream().filter(p -> p.getBenchmarkScore2023() != null).count();
+        long with2022 = programs.stream().filter(p -> p.getBenchmarkScore2022() != null).count();
+        
+        log.info("Score coverage - 2024: {}, 2023: {}, 2022: {}", with2024, with2023, with2022);
+        
+        if (with2024 > 0) {
+            Double avgScore = programs.stream()
+                    .map(Program::getBenchmarkScore2024)
+                    .filter(Objects::nonNull)
+                    .mapToDouble(Double::doubleValue)
+                    .average()
+                    .orElse(0.0);
+            log.info("Average 2024 score: {}", Math.round(avgScore * 100.0) / 100.0);
+        }
+    }
+    
+    // Existing helper methods (unchanged)
+    private String extractUniversityCode(String url) {
+        Pattern pattern = Pattern.compile(".*-([A-Z]{3})\\.html");
+        Matcher matcher = pattern.matcher(url);
+        return matcher.find() ? matcher.group(1) : null;
+    }
+    
+    private String cleanUniversityName(String name) {
+        return name.replaceAll("Điểm chuẩn\\s+", "")
+                  .replaceAll("\\s+\\d{4}.*", "")
+                  .replaceAll("chính xác", "")
+                  .trim();
+    }
+    
+    private String extractFullName(Document doc, String defaultName) {
+        Elements headings = doc.select("h1, h2, title");
+        for (Element heading : headings) {
+            String text = heading.text();
+            if (text.contains("Đại học") || text.contains("Trường")) {
+                return cleanUniversityName(text);
+            }
+        }
+        return defaultName;
+    }
+    
+    private String extractDescription(Document doc) {
+        Elements metaDesc = doc.select("meta[name=description]");
+        if (!metaDesc.isEmpty()) {
+            return metaDesc.attr("content").trim();
+        }
+        
+        Elements paragraphs = doc.select("p");
+        if (!paragraphs.isEmpty()) {
+            return paragraphs.first().text().trim();
+        }
+        
+        return null;
+    }
+    
+    // Async methods and update logic (unchanged)
     @Async
     public CompletableFuture<Map<String, Object>> crawlAllUniversities() {
         Map<String, Object> result = new HashMap<>();
         
         try {
-            log.info("Starting full university crawl...");
+            log.info("Starting full university crawl with fixed parser...");
             
-            // Discover universities
             List<UniversityInfo> universityInfos = discoverUniversities();
             log.info("Discovered {} universities to crawl", universityInfos.size());
             
@@ -195,12 +494,10 @@ public class TuyenSinh247CrawlerService {
             AtomicInteger updated = new AtomicInteger(0);
             AtomicInteger created = new AtomicInteger(0);
             
-            // Crawl each university
             for (UniversityInfo info : universityInfos) {
                 try {
                     University university = crawlUniversityDetails(info);
                     
-                    // Check if university already exists
                     Optional<University> existing = universityRepository.findByCode(university.getCode());
                     if (existing.isPresent()) {
                         updateExistingUniversity(existing.get(), university);
@@ -216,16 +513,14 @@ public class TuyenSinh247CrawlerService {
                         log.info("Progress: {}/{} universities processed", processed.get(), universityInfos.size());
                     }
                     
-                    // Rate limiting
                     Thread.sleep(DELAY_MS + (long)(Math.random() * 1000));
                     
                 } catch (Exception e) {
                     errors.incrementAndGet();
                     log.error("Error crawling university {}: {}", info.getName(), e.getMessage());
                     
-                    // Continue with next university
                     try {
-                        Thread.sleep(2000); // Longer delay on error
+                        Thread.sleep(2000);
                     } catch (InterruptedException ie) {
                         Thread.currentThread().interrupt();
                         break;
@@ -240,7 +535,7 @@ public class TuyenSinh247CrawlerService {
             result.put("updated", updated.get());
             result.put("errors", errors.get());
             
-            log.info("Crawl completed. Processed: {}, Created: {}, Updated: {}, Errors: {}", 
+            log.info("Fixed crawl completed. Processed: {}, Created: {}, Updated: {}, Errors: {}", 
                     processed.get(), created.get(), updated.get(), errors.get());
             
         } catch (Exception e) {
@@ -252,122 +547,35 @@ public class TuyenSinh247CrawlerService {
         return CompletableFuture.completedFuture(result);
     }
     
-    // Helper methods
-    private String extractUniversityCode(String url) {
-        // Extract code from URL like "/diem-chuan/dai-hoc-bach-khoa-hcm-QSB.html"
-        Pattern pattern = Pattern.compile(".*-([A-Z]{3})\\.html");
-        Matcher matcher = pattern.matcher(url);
-        return matcher.find() ? matcher.group(1) : null;
-    }
-    
-    private String cleanUniversityName(String name) {
-        return name.replaceAll("Điểm chuẩn\\s+", "")
-                  .replaceAll("\\s+\\d{4}.*", "")
-                  .replaceAll("chính xác", "")
-                  .trim();
-    }
-    
-    private String extractFullName(Document doc, String defaultName) {
-        // Try to extract full name from page title or main heading
-        Elements headings = doc.select("h1, h2, title");
-        for (Element heading : headings) {
-            String text = heading.text();
-            if (text.contains("Đại học") || text.contains("Trường")) {
-                return cleanUniversityName(text);
-            }
-        }
-        return defaultName;
-    }
-    
-    private String extractLocation(Document doc) {
-        // Try to extract location from university description
-        String text = doc.text().toLowerCase();
-        
-        if (text.contains("hà nội") || text.contains("hanoi")) return "Hà Nội";
-        if (text.contains("hồ chí minh") || text.contains("tp.hcm") || text.contains("tphcm")) return "TP.HCM";
-        if (text.contains("đà nẵng")) return "Đà Nẵng";
-        if (text.contains("hải phòng")) return "Hải Phòng";
-        if (text.contains("cần thơ")) return "Cần Thơ";
-        if (text.contains("huế")) return "Huế";
-        
-        return "Chưa xác định";
-    }
-    
-    private String extractDescription(Document doc) {
-        // Extract description from meta tags or main content
-        Elements metaDesc = doc.select("meta[name=description]");
-        if (!metaDesc.isEmpty()) {
-            return metaDesc.attr("content").trim();
-        }
-        
-        // Fallback to first paragraph
-        Elements paragraphs = doc.select("p");
-        if (!paragraphs.isEmpty()) {
-            return paragraphs.first().text().trim();
-        }
-        
-        return null;
-    }
-    
-    private Double parseScore(String scoreText) {
-        try {
-            // Remove all non-digit and non-dot characters
-            String cleaned = scoreText.replaceAll("[^0-9.]", "");
-            if (cleaned.isEmpty()) return null;
-            
-            double score = Double.parseDouble(cleaned);
-            // Validate score range (typically 0-30 for university entrance)
-            return (score >= 0 && score <= 50) ? score : null;
-            
-        } catch (NumberFormatException e) {
-            return null;
-        }
-    }
-    
-    private String extractAdmissionMethod(String note) {
-        String lowerNote = note.toLowerCase();
-        
-        if (lowerNote.contains("xét tuyển kết hợp")) return "Xét tuyển kết hợp";
-        if (lowerNote.contains("điểm thi thpt") || lowerNote.contains("thpt")) return "Điểm thi THPT";
-        if (lowerNote.contains("đgnl")) return "Đánh giá năng lực";
-        if (lowerNote.contains("học bạ")) return "Xét học bạ";
-        if (lowerNote.contains("đánh giá tư duy")) return "Đánh giá tư duy";
-        
-        return "Xét tuyển kết hợp"; // Default
-    }
-    
     private void updateExistingUniversity(University existing, University newData) {
-        // Update university info
         existing.setName(newData.getName());
         existing.setFullName(newData.getFullName());
-        if (newData.getLocation() != null) {
-            existing.setLocation(newData.getLocation());
-        }
-        if (newData.getDescription() != null) {
-            existing.setDescription(newData.getDescription());
+        existing.setLocation(newData.getLocation());
+        
+        Map<String, Program> existingProgramsMap = new HashMap<>();
+        for (Program p : existing.getPrograms()) {
+            String key = createProgramKey(p.getName(), p.getNote(), p.getAdmissionMethod());
+            existingProgramsMap.put(key, p);
         }
         
-        // Merge programs
+        existing.getPrograms().clear();
+        
         for (Program newProgram : newData.getPrograms()) {
-            Optional<Program> existingProgram = existing.getPrograms().stream()
-                    .filter(p -> p.getName().equals(newProgram.getName()) && 
-                               Objects.equals(p.getNote(), newProgram.getNote()))
-                    .findFirst();
+            String key = createProgramKey(newProgram.getName(), newProgram.getNote(), newProgram.getAdmissionMethod());
+            Program existingProgram = existingProgramsMap.get(key);
             
-            if (existingProgram.isPresent()) {
-                // Update existing program with new data
-                Program existingP = existingProgram.get();
+            if (existingProgram != null) {
                 if (newProgram.getBenchmarkScore2024() != null) {
-                    existingP.setBenchmarkScore2024(newProgram.getBenchmarkScore2024());
+                    existingProgram.setBenchmarkScore2024(newProgram.getBenchmarkScore2024());
                 }
-                if (newProgram.getSubjectCombination() != null) {
-                    existingP.setSubjectCombination(newProgram.getSubjectCombination());
+                if (newProgram.getBenchmarkScore2023() != null) {
+                    existingProgram.setBenchmarkScore2023(newProgram.getBenchmarkScore2023());
                 }
-                if (newProgram.getAdmissionMethod() != null) {
-                    existingP.setAdmissionMethod(newProgram.getAdmissionMethod());
+                if (newProgram.getBenchmarkScore2022() != null) {
+                    existingProgram.setBenchmarkScore2022(newProgram.getBenchmarkScore2022());
                 }
+                existing.getPrograms().add(existingProgram);
             } else {
-                // Add new program
                 newProgram.setUniversity(existing);
                 existing.getPrograms().add(newProgram);
             }
@@ -376,9 +584,7 @@ public class TuyenSinh247CrawlerService {
         universityRepository.save(existing);
     }
     
-    // Test method to crawl single university
     public University crawlSingleUniversity(String code) throws IOException {
-        // Find university info by code
         List<UniversityInfo> allUniversities = discoverUniversities();
         
         Optional<UniversityInfo> targetUniversity = allUniversities.stream()
