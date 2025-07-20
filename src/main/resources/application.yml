@@ -1,0 +1,50 @@
+spring:
+  application:
+    name: education-chatbot
+
+  datasource:
+    url: jdbc:mysql://localhost:3306/education_chatbot
+    username: chatbot_user
+    password: chatbot_password
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQL8Dialect
+        format_sql: true
+
+  web:
+    cors:
+      allowed-origins: "http://localhost:3000"
+      allowed-methods: "*"
+      allowed-headers: "*"
+      allow-credentials: true
+
+server:
+  port: 8080
+
+logging:
+  level:
+    com.example.educationchatbot: DEBUG
+    org.hibernate.SQL: DEBUG
+
+# Crawler settings
+crawler:
+  base-url: https://diemthi.tuyensinh247.com
+  delay-ms: 1000
+  timeout-ms: 15000
+  batch-size: 50
+
+# RAG settings
+rag:
+  ollama:
+    url: http://localhost:11434
+    model: gemma2:2b
+  chromadb:
+    path: ./chroma_db
+  embedding:
+    model: keepitreal/vietnamese-sbert
