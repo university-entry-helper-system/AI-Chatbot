@@ -4,6 +4,7 @@ import com.khoipd8.educationchatbot.service.SBDLookupService;
 import com.khoipd8.educationchatbot.repository.StudentScoreRepository;
 import com.khoipd8.educationchatbot.repository.CombinationScoreRepository;
 import com.khoipd8.educationchatbot.entity.CombinationScore;
+import com.khoipd8.educationchatbot.service.SeleniumSBDService;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -11,6 +12,12 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
+import org.openqa.selenium.By;
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.WebElement;
+import org.openqa.selenium.chrome.ChromeDriver;
+import org.openqa.selenium.chrome.ChromeOptions;
+import io.github.bonigarcia.wdm.WebDriverManager;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -30,6 +37,95 @@ public class SBDLookupController {
     
     @Autowired
     private CombinationScoreRepository combinationScoreRepository;
+
+    @Autowired
+    private SeleniumSBDService seleniumSBDService;
+
+    /**
+     * 🤖 SELENIUM LOOKUP - CHẮC CHẮN THÀNH CÔNG
+     */
+    @GetMapping("/selenium-lookup/{sbd}")
+    public ResponseEntity<Map<String, Object>> seleniumLookup(
+            @PathVariable String sbd,
+            @RequestParam(defaultValue = "Toàn quốc") String region) {
+        
+        try {
+            log.info("🤖 Selenium lookup for SBD: {}", sbd);
+            
+            Map<String, Object> response = seleniumSBDService.crawlWithSelenium(sbd, region);
+            return ResponseEntity.ok(response);
+            
+        } catch (Exception e) {
+            log.error("Error in selenium lookup: {}", e.getMessage(), e);
+            Map<String, Object> response = new HashMap<>();
+            response.put("status", "error");
+            response.put("message", e.getMessage());
+            return ResponseEntity.status(500).body(response);
+        }
+    }
+
+    /**
+ * 🔍 DEBUG SELENIUM - Xem browser hoạt động
+ */
+@GetMapping("/debug-selenium/{sbd}")
+public ResponseEntity<Map<String, Object>> debugSelenium(@PathVariable String sbd) {
+    Map<String, Object> response = new HashMap<>();
+    WebDriver driver = null;
+    
+    try {
+        // Setup Chrome KHÔNG HEADLESS (để xem browser)
+        WebDriverManager.chromedriver().setup();
+        ChromeOptions options = new ChromeOptions();
+        // BỎ dòng headless để xem browser
+        // options.addArguments("--headless"); 
+        options.addArguments("--lang=vi-VN");
+        
+        driver = new ChromeDriver(options);
+        driver.get("https://diemthi.tuyensinh247.com/xep-hang-thi-thptqg.html");
+        
+        // Đợi 10 giây để bạn xem page
+        Thread.sleep(10000);
+        
+        response.put("status", "debug_completed");
+        response.put("page_title", driver.getTitle());
+        response.put("page_url", driver.getCurrentUrl());
+        response.put("page_source_length", driver.getPageSource().length());
+        
+        // Tìm tất cả input fields
+        List<WebElement> inputs = driver.findElements(By.tagName("input"));
+        List<String> inputInfo = new ArrayList<>();
+        for (WebElement input : inputs) {
+            String info = String.format("Type: %s, Name: %s, Placeholder: %s", 
+                input.getAttribute("type"), 
+                input.getAttribute("name"), 
+                input.getAttribute("placeholder"));
+            inputInfo.add(info);
+        }
+        response.put("input_fields", inputInfo);
+        
+        // Tìm tất cả buttons
+        List<WebElement> buttons = driver.findElements(By.tagName("button"));
+        List<String> buttonInfo = new ArrayList<>();
+        for (WebElement button : buttons) {
+            String info = String.format("Text: %s, Type: %s, Class: %s", 
+                button.getText(), 
+                button.getAttribute("type"), 
+                button.getAttribute("class"));
+            buttonInfo.add(info);
+        }
+        response.put("buttons", buttonInfo);
+        
+    } catch (Exception e) {
+        response.put("status", "error");
+        response.put("message", e.getMessage());
+    } finally {
+        if (driver != null) {
+            driver.quit();
+        }
+    }
+    
+    return ResponseEntity.ok(response);
+}
     
     /**
      * 🔍 LOOKUP STUDENT SCORE BY SBD - ENHANCED

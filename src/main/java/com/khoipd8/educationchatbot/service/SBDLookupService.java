@@ -11,6 +11,7 @@ import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.jsoup.Connection;
 
 import java.io.IOException;
 import java.util.*;
@@ -28,6 +29,8 @@ public class SBDLookupService {
     
     @Autowired
     private CombinationScoreRepository combinationScoreRepository;
+
+    
     
     // Main lookup method - FIXED LOGIC
     public Map<String, Object> lookupStudentScore(String sbd, String region) {
@@ -164,99 +167,117 @@ public class SBDLookupService {
     }
     
     // Try form submission approach
+
     private Map<String, Object> tryFormSubmission(String sbd, String region) throws IOException {
-        log.debug("Trying form submission for SBD: {}", sbd);
+        log.debug("Trying FIXED form submission with session for SBD: {}", sbd);
         
         try {
-            // ĐÚNG URL từ screenshot
+            // Step 1: Tạo cookie store để lưu session
+            Map<String, String> cookies = new HashMap<>();
+            
+            // Step 2: GET form page để lấy session + CSRF token
             String formUrl = "https://diemthi.tuyensinh247.com/xep-hang-thi-thptqg.html";
             
-            // Step 1: Get the form page first to establish session
-            Document formPage = Jsoup.connect(formUrl)
+            Connection.Response formResponse = Jsoup.connect(formUrl)
                     .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
                     .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8")
                     .header("Accept-Language", "vi-VN,vi;q=0.9,en;q=0.8")
                     .header("Accept-Encoding", "gzip, deflate, br")
+                    .header("Cache-Control", "no-cache")
                     .header("Connection", "keep-alive")
                     .header("Upgrade-Insecure-Requests", "1")
                     .timeout(20000)
-                    .get();
+                    .execute();
             
-            log.debug("Successfully loaded form page: {}", formPage.title());
+            // Lưu cookies từ response
+            cookies.putAll(formResponse.cookies());
+            Document formPage = formResponse.parse();
             
-            // Step 2: Analyze form structure
-            Elements forms = formPage.select("form");
-            if (forms.isEmpty()) {
-                log.debug("No forms found, looking for AJAX endpoint");
-                return tryAjaxSubmission(sbd, region, formPage);
+            log.debug("✅ Got form page, cookies: {}", cookies.keySet());
+            
+            // Step 3: Extract CSRF token
+            String csrfToken = null;
+            Elements tokenInputs = formPage.select("input[name='_token']");
+            if (!tokenInputs.isEmpty()) {
+                csrfToken = tokenInputs.first().attr("value");
             }
             
-            Element form = forms.first();
-            String formAction = form.attr("action");
-            String formMethod = form.attr("method").toLowerCase();
-            
-            if (formAction.isEmpty()) {
-                formAction = formUrl; // Self-submit
-            } else if (formAction.startsWith("/")) {
-                formAction = "https://diemthi.tuyensinh247.com" + formAction;
+            // Thử các pattern khác cho CSRF token
+            if (csrfToken == null || csrfToken.isEmpty()) {
+                Elements metaTokens = formPage.select("meta[name='csrf-token']");
+                if (!metaTokens.isEmpty()) {
+                    csrfToken = metaTokens.first().attr("content");
+                }
             }
             
-            log.debug("Form action: {}, method: {}", formAction, formMethod);
+            log.debug("CSRF Token: {}", csrfToken);
             
-            // Step 3: Prepare form data
+            // Step 4: Chuẩn bị form data
             Map<String, String> formData = new HashMap<>();
+            formData.put("sbd", sbd);
             
-            // Get all hidden inputs
-            Elements hiddenInputs = form.select("input[type=hidden]");
+            // Map region
+            String regionCode = mapRegionToParam(region);
+            formData.put("khu_vuc", regionCode);
+            
+            // Thêm CSRF token nếu có
+            if (csrfToken != null && !csrfToken.isEmpty()) {
+                formData.put("_token", csrfToken);
+            }
+            
+            // Thêm các hidden inputs khác
+            Elements hiddenInputs = formPage.select("input[type='hidden']");
             for (Element input : hiddenInputs) {
                 String name = input.attr("name");
                 String value = input.attr("value");
-                if (!name.isEmpty()) {
+                if (!name.isEmpty() && !formData.containsKey(name)) {
                     formData.put(name, value);
                 }
             }
             
-            // Add main form parameters (dựa trên screenshot)
-            formData.put("sbd", sbd);
-            
-            // Map region names
-            String regionParam = mapRegionToParam(region);
-            formData.put("khu_vuc", regionParam);
-            formData.put("region", regionParam);
-            
             log.debug("Form data: {}", formData);
             
-            // Step 4: Submit form
-            Document resultPage;
-            if ("post".equals(formMethod)) {
-                resultPage = Jsoup.connect(formAction)
-                        .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-                        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-                        .header("Accept-Language", "vi-VN,vi;q=0.9,en;q=0.8")
-                        .header("Referer", formUrl)
-                        .header("Origin", "https://diemthi.tuyensinh247.com")
-                        .data(formData)
-                        .timeout(25000)
-                        .post();
-            } else {
-                // GET method
-                resultPage = Jsoup.connect(formAction)
-                        .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-                        .header("Referer", formUrl)
-                        .data(formData)
-                        .timeout(25000)
-                        .get();
-            }
+            // Step 5: Submit form với session cookies
+            Connection.Response submitResponse = Jsoup.connect(formUrl)
+                    .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                    .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                    .header("Accept-Language", "vi-VN,vi;q=0.9,en;q=0.8")
+                    .header("Content-Type", "application/x-www-form-urlencoded")
+                    .header("Origin", "https://diemthi.tuyensinh247.com")
+                    .header("Referer", formUrl)
+                    .header("Cache-Control", "no-cache")
+                    .cookies(cookies) // QUAN TRỌNG: Gửi session cookies
+                    .data(formData)
+                    .method(Connection.Method.POST)
+                    .timeout(25000)
+                    .execute();
             
-            log.debug("Form submission completed, analyzing response...");
+            Document resultPage = submitResponse.parse();
             
-            // Step 5: Parse response
-            return parseWebResponse(resultPage, sbd, region, "form_submission");
+            log.debug("✅ Form submitted, response status: {}", submitResponse.statusCode());
+            
+            // Step 6: Parse kết quả
+            return parseWebResponse(resultPage, sbd, region, "fixed_form_submission");
             
         } catch (IOException e) {
-            log.debug("Form submission failed: {}", e.getMessage());
+            log.error("❌ Fixed form submission failed: {}", e.getMessage());
             throw e;
         }
+    }
+    
+    // Helper method để map region
+    private String mapRegionToParam(String region) {
+        if (region == null) return "Toàn quốc";
+        
+        String lowerRegion = region.toLowerCase();
+        if (lowerRegion.contains("toàn quốc") || lowerRegion.contains("toan quoc")) {
+            return "Toàn quốc";
+        } else if (lowerRegion.contains("miền bắc") || lowerRegion.contains("mien bac")) {
+            return "Miền Bắc";
+        } else if (lowerRegion.contains("miền nam") || lowerRegion.contains("mien nam")) {
+            return "Miền Nam";
+        }
+        return "Toàn quốc"; // Default
     }
 
     private Map<String, Object> tryAjaxSubmission(String sbd, String region, Document formPage) throws IOException {
@@ -423,26 +444,26 @@ public class SBDLookupService {
     }
     
     // 6. HELPER METHODS
-    private String mapRegionToParam(String region) {
-        if (region == null) return "toan_quoc";
+    // private String mapRegionToParam(String region) {
+    //     if (region == null) return "toan_quoc";
         
-        switch (region.toLowerCase()) {
-            case "toàn quốc":
-            case "toan quoc":
-            case "all":
-                return "toan_quoc";
-            case "miền bắc":
-            case "mien bac":
-            case "north":
-                return "mien_bac";
-            case "miền nam":
-            case "mien nam":
-            case "south":
-                return "mien_nam";
-            default:
-                return "toan_quoc";
-        }
-    }
+    //     switch (region.toLowerCase()) {
+    //         case "toàn quốc":
+    //         case "toan quoc":
+    //         case "all":
+    //             return "toan_quoc";
+    //         case "miền bắc":
+    //         case "mien bac":
+    //         case "north":
+    //             return "mien_bac";
+    //         case "miền nam":
+    //         case "mien nam":
+    //         case "south":
+    //             return "mien_nam";
+    //         default:
+    //             return "toan_quoc";
+    //     }
+    // }
     
     private String extractAjaxUrl(String pageHtml) {
         try {
