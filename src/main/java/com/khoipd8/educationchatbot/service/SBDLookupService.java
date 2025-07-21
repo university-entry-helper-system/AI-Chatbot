@@ -1426,13 +1426,17 @@ public class SBDLookupService {
         if (data == null) return;
         try {
             String sbd = (String) data.get("candidate_number");
+            // Xóa tất cả bản ghi cũ theo SBD (nếu có)
+            combinationScoreRepository.deleteBySbd(sbd);
+            studentScoreRepository.deleteBySbd(sbd);
+
             Integer year = data.get("data_year") instanceof Integer ? (Integer) data.get("data_year") : 2025;
-            // Parse mark_info
             List<Map<String, Object>> markInfo = (List<Map<String, Object>>) data.get("mark_info");
             StudentScore studentScore = new StudentScore();
             studentScore.setSbd(sbd);
             studentScore.setExamYear(year);
             studentScore.setRegion(region);
+
             if (markInfo != null) {
                 for (Map<String, Object> m : markInfo) {
                     String name = (String) m.get("name");
@@ -1443,13 +1447,16 @@ public class SBDLookupService {
                     else if (name.contains("Văn")) studentScore.setScoreLiterature(score);
                     else if (name.contains("Lý")) studentScore.setScorePhysics(score);
                     else if (name.contains("Hóa")) studentScore.setScoreChemistry(score);
-                    else if (name.contains("Anh")) studentScore.setScoreEnglish(score);
+                    else if (name.contains("Anh") || name.contains("Ngoại ngữ")) studentScore.setScoreEnglish(score);
                     else if (name.contains("Sinh")) studentScore.setScoreBiology(score);
                     else if (name.contains("Sử")) studentScore.setScoreHistory(score);
                     else if (name.contains("Địa")) studentScore.setScoreGeography(score);
+                    else if (name.contains("GDCD")) studentScore.setScoreCivicEducation(score);
+                    // Bổ sung thêm các môn khác nếu cần
                 }
             }
             studentScoreRepository.save(studentScore);
+
             // Parse blocks (tổ hợp)
             List<Map<String, Object>> blocks = (List<Map<String, Object>>) data.get("blocks");
             if (blocks != null) {

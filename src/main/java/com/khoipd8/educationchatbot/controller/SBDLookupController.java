@@ -1303,4 +1303,57 @@ public ResponseEntity<Map<String, Object>> debugSelenium(@PathVariable String sb
         
         return "❌ NO CHANGES: Không có thay đổi nào sau submit. Có thể: (1) SBD không hợp lệ, (2) Website không hoạt động, (3) Cần authentication/captcha.";
     }
+
+    @Operation(summary = "Lấy thông tin điểm thi đã lưu theo SBD", description = "Trả về thông tin điểm thi và tổ hợp đã lưu trong database cho SBD.")
+    @GetMapping("/get/{sbd}")
+    public ResponseEntity<Map<String, Object>> getSBDFromDB(@PathVariable String sbd) {
+        Map<String, Object> resp = new HashMap<>();
+        var studentOpt = studentScoreRepository.findBySbd(sbd);
+        if (studentOpt.isEmpty()) {
+            resp.put("status", "not_found");
+            resp.put("sbd", sbd);
+            return ResponseEntity.ok(resp);
+        }
+        var student = studentOpt.get();
+        resp.put("status", "found");
+        resp.put("sbd", student.getSbd());
+        resp.put("exam_year", student.getExamYear());
+        resp.put("region", student.getRegion());
+        // Subject scores
+        Map<String, Object> subjectScores = new HashMap<>();
+        subjectScores.put("toan", student.getScoreMath());
+        subjectScores.put("van", student.getScoreLiterature());
+        subjectScores.put("ly", student.getScorePhysics());
+        subjectScores.put("hoa", student.getScoreChemistry());
+        subjectScores.put("anh", student.getScoreEnglish());
+        subjectScores.put("sinh", student.getScoreBiology());
+        subjectScores.put("su", student.getScoreHistory());
+        subjectScores.put("dia", student.getScoreGeography());
+        resp.put("subject_scores", subjectScores);
+        // Blocks (tổ hợp)
+        var blocks = combinationScoreRepository.findBySbd(sbd).stream().map(comb -> {
+            Map<String, Object> b = new HashMap<>();
+            b.put("label", comb.getCombinationName());
+            b.put("value", comb.getCombinationCode());
+            b.put("total_score", comb.getTotalScore());
+            b.put("equivalent_score_2024", comb.getEquivalentScore2024());
+            b.put("students_with_same_score", comb.getStudentsWithSameScore());
+            b.put("students_with_higher_score", comb.getStudentsWithHigherScore());
+            b.put("total_students_in_combination", comb.getTotalStudentsInCombination());
+            return b;
+        }).toList();
+        resp.put("blocks", blocks);
+        return ResponseEntity.ok(resp);
+    }
+
+    @Operation(summary = "Xóa tất cả bản ghi theo SBD", description = "Xóa mọi StudentScore và CombinationScore có cùng SBD (kể cả duplicate).")
+    @DeleteMapping("/delete-all/{sbd}")
+    public ResponseEntity<Map<String, Object>> deleteAllBySbd(@PathVariable String sbd) {
+        combinationScoreRepository.deleteBySbd(sbd);
+        studentScoreRepository.deleteBySbd(sbd);
+        Map<String, Object> resp = new HashMap<>();
+        resp.put("status", "deleted_all");
+        resp.put("sbd", sbd);
+        return ResponseEntity.ok(resp);
+    }
 }
