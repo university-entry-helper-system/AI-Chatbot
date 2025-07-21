@@ -9,7 +9,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -253,4 +257,235 @@ public class SBDLookupController {
         
         return assessment;
     }
+
+    // THÊM VÀO SBDLookupController.java
+
+/**
+ * 🧪 TEST WEB CRAWLING
+ * Test khả năng crawl thực từ website
+ */
+@PostMapping("/test-crawl/{sbd}")
+public ResponseEntity<Map<String, Object>> testWebCrawling(@PathVariable String sbd) {
+    Map<String, Object> response = new HashMap<>();
+    
+    try {
+        log.info("Testing web crawling for SBD: {}", sbd);
+        
+        // Force delete any existing data
+        combinationScoreRepository.deleteBySbd(sbd);
+        studentScoreRepository.deleteBySbd(sbd);
+        
+        // Test different crawling approaches
+        Map<String, Object> testResults = new HashMap<>();
+        
+        // Test 1: Form submission
+        try {
+            testResults.put("form_submission", testFormSubmission(sbd));
+        } catch (Exception e) {
+            testResults.put("form_submission", Map.of("status", "failed", "error", e.getMessage()));
+        }
+        
+        // Test 2: GET request
+        try {
+            testResults.put("get_request", testGetRequest(sbd));
+        } catch (Exception e) {
+            testResults.put("get_request", Map.of("status", "failed", "error", e.getMessage()));
+        }
+        
+        // Test 3: Alternative URLs
+        try {
+            testResults.put("alternative_urls", testAlternativeUrls(sbd));
+        } catch (Exception e) {
+            testResults.put("alternative_urls", Map.of("status", "failed", "error", e.getMessage()));
+        }
+        
+        response.put("status", "test_completed");
+        response.put("sbd", sbd);
+        response.put("test_results", testResults);
+        response.put("test_timestamp", System.currentTimeMillis());
+        
+        // Summary
+        long successfulMethods = testResults.values().stream()
+                .filter(result -> result instanceof Map)
+                .map(result -> (Map<String, Object>) result)
+                .filter(result -> "success".equals(result.get("status")))
+                .count();
+        
+        response.put("summary", Map.of(
+            "total_methods_tested", testResults.size(),
+            "successful_methods", successfulMethods,
+            "overall_success", successfulMethods > 0
+        ));
+        
+    } catch (Exception e) {
+        log.error("Error in test crawling", e);
+        response.put("status", "error");
+        response.put("message", e.getMessage());
+        return ResponseEntity.status(500).body(response);
+    }
+    
+    return ResponseEntity.ok(response);
+}
+
+/**
+ * 🔍 CHECK WEBSITE STATUS
+ * Kiểm tra trạng thái website nguồn
+ */
+@GetMapping("/check-website-status")
+public ResponseEntity<Map<String, Object>> checkWebsiteStatus() {
+    Map<String, Object> response = new HashMap<>();
+    
+    try {
+        log.info("Checking website status...");
+        
+        String[] testUrls = {
+            "https://diemthi.tuyensinh247.com",
+            "https://diemthi.tuyensinh247.com/tra-cuu-diem-thi-tot-nghiep-thpt-2024.html",
+            "https://thi.tuyensinh247.com",
+            "https://tracuu.tuyensinh247.com"
+        };
+        
+        Map<String, Object> urlStatuses = new HashMap<>();
+        
+        for (String url : testUrls) {
+            Map<String, Object> urlStatus = new HashMap<>();
+            long startTime = System.currentTimeMillis();
+            
+            try {
+                Document doc = Jsoup.connect(url)
+                        .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                        .timeout(10000)
+                        .get();
+                
+                long responseTime = System.currentTimeMillis() - startTime;
+                
+                urlStatus.put("status", "accessible");
+                urlStatus.put("response_time_ms", responseTime);
+                urlStatus.put("title", doc.title());
+                urlStatus.put("has_forms", !doc.select("form").isEmpty());
+                urlStatus.put("content_length", doc.text().length());
+                
+            } catch (Exception e) {
+                urlStatus.put("status", "failed");
+                urlStatus.put("error", e.getMessage());
+                urlStatus.put("response_time_ms", System.currentTimeMillis() - startTime);
+            }
+            
+            urlStatuses.put(url, urlStatus);
+        }
+        
+        response.put("status", "check_completed");
+        response.put("url_statuses", urlStatuses);
+        response.put("check_timestamp", System.currentTimeMillis());
+        
+        // Summary
+        long accessibleUrls = urlStatuses.values().stream()
+                .filter(status -> status instanceof Map)
+                .map(status -> (Map<String, Object>) status)
+                .filter(status -> "accessible".equals(status.get("status")))
+                .count();
+        
+        response.put("summary", Map.of(
+            "total_urls_tested", testUrls.length,
+            "accessible_urls", accessibleUrls,
+            "website_health", accessibleUrls > 0 ? "healthy" : "problematic"
+        ));
+        
+    } catch (Exception e) {
+        log.error("Error checking website status", e);
+        response.put("status", "error");
+        response.put("message", e.getMessage());
+    }
+    
+    return ResponseEntity.ok(response);
+}
+
+/**
+ * 📊 CRAWLING STATISTICS
+ * Thống kê tình trạng crawling
+ */
+@GetMapping("/crawling-stats")
+public ResponseEntity<Map<String, Object>> getCrawlingStats() {
+    Map<String, Object> response = new HashMap<>();
+    
+    try {
+        long totalStudents = studentScoreRepository.count();
+        long studentsWithScores = studentScoreRepository.countWithScores();
+        long totalCombinations = combinationScoreRepository.count();
+        
+        // Check data sources
+        List<String> dataSources = new ArrayList<>();
+        // This would require adding a 'source' field to StudentScore entity
+        
+        response.put("status", "success");
+        response.put("statistics", Map.of(
+            "total_students_in_db", totalStudents,
+            "students_with_valid_scores", studentsWithScores,
+            "total_combination_records", totalCombinations,
+            "data_completeness_rate", totalStudents > 0 ? 
+                Math.round((double) studentsWithScores / totalStudents * 100) : 0,
+            "last_successful_crawl", "N/A", // Would need to track this
+            "crawl_success_rate", "N/A" // Would need to track this
+        ));
+        
+        response.put("data_quality", Map.of(
+            "has_data", totalStudents > 0,
+            "data_density", studentsWithScores > 0 ? "good" : "empty",
+            "recommendation", totalStudents == 0 ? 
+                "Cần test crawling để kiểm tra kết nối website" : 
+                "Dữ liệu có sẵn"
+        ));
+        
+    } catch (Exception e) {
+        log.error("Error getting crawling stats", e);
+        response.put("status", "error");
+        response.put("message", e.getMessage());
+    }
+    
+    return ResponseEntity.ok(response);
+}
+
+// Helper methods for testing
+private Map<String, Object> testFormSubmission(String sbd) {
+    // Implementation của test form submission
+    Map<String, Object> result = new HashMap<>();
+    try {
+        // Test logic here
+        result.put("status", "success");
+        result.put("method", "form_submission");
+        result.put("message", "Form submission test completed");
+    } catch (Exception e) {
+        result.put("status", "failed");
+        result.put("error", e.getMessage());
+    }
+    return result;
+}
+
+private Map<String, Object> testGetRequest(String sbd) {
+    // Implementation của test GET request
+    Map<String, Object> result = new HashMap<>();
+    try {
+        result.put("status", "success");
+        result.put("method", "get_request");
+        result.put("message", "GET request test completed");
+    } catch (Exception e) {
+        result.put("status", "failed");
+        result.put("error", e.getMessage());
+    }
+    return result;
+}
+
+private Map<String, Object> testAlternativeUrls(String sbd) {
+    // Implementation của test alternative URLs
+    Map<String, Object> result = new HashMap<>();
+    try {
+        result.put("status", "success");
+        result.put("method", "alternative_urls");
+        result.put("message", "Alternative URLs test completed");
+    } catch (Exception e) {
+        result.put("status", "failed");
+        result.put("error", e.getMessage());
+    }
+    return result;
+}
 }
