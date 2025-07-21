@@ -96,10 +96,23 @@
             <version>2.3.0</version>
         </dependency>
 
+        <!-- Chrome DevTools Protocol -->
+        <dependency>
+            <groupId>org.seleniumhq.selenium</groupId>
+            <artifactId>selenium-chrome-driver</artifactId>
+            <version>4.14.0</version>
+        </dependency>
+        
+        <!-- Selenium support (nếu chưa có) -->
+        <dependency>
+            <groupId>org.seleniumhq.selenium</groupId>
+            <artifactId>selenium-support</artifactId>
+            <version>4.14.0</version>
+        </dependency>
         <dependency>
             <groupId>org.seleniumhq.selenium</groupId>
             <artifactId>selenium-java</artifactId>
-            <version>4.15.0</version>
+            <version>4.14.0</version>
         </dependency>
         <dependency>
             <groupId>io.github.bonigarcia</groupId>

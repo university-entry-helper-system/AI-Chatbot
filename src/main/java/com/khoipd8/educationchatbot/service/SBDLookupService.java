@@ -17,6 +17,11 @@ import java.io.IOException;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.net.URI;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 @Service
 @Slf4j
@@ -1377,6 +1382,101 @@ public class SBDLookupService {
             case "D01": return 200000;
             case "D07": return 90000;
             default: return 100000;
+        }
+    }
+
+    // NEW: Gọi trực tiếp API AJAX của tuyensinh247 để lấy điểm số
+    public Map<String, Object> getStudentScoreFromAPI(String sbd, String region) {
+        Map<String, Object> result = new HashMap<>();
+        try {
+            HttpClient client = HttpClient.newHttpClient();
+            // region: "CN" cho Toàn quốc, "MB" cho Miền Bắc, "MN" cho Miền Nam
+            String regionCode = (region == null || region.toLowerCase().contains("toàn")) ? "CN" : region;
+            String payload = String.format("{\"region\":\"%s\",\"userNumber\":\"%s\"}", regionCode, sbd);
+            HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create("https://diemthi.tuyensinh247.com/api/user/thpt-get-block"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(payload))
+                .build();
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            ObjectMapper mapper = new ObjectMapper();
+            Map<String, Object> json = mapper.readValue(response.body(), Map.class);
+            if (Boolean.TRUE.equals(json.get("success")) && json.get("data") != null) {
+                result.put("status", "found");
+                result.put("sbd", sbd);
+                result.put("region", region);
+                result.put("data", json.get("data"));
+            } else {
+                result.put("status", "not_found");
+                result.put("sbd", sbd);
+                result.put("region", region);
+                result.put("message", "Không tìm thấy dữ liệu trên API tuyensinh247");
+            }
+        } catch (Exception e) {
+            result.put("status", "error");
+            result.put("sbd", sbd);
+            result.put("region", region);
+            result.put("message", e.getMessage());
+        }
+        return result;
+    }
+
+    // Lưu dữ liệu điểm thi từ API vào database
+    public void saveStudentScoreFromAPIData(Map<String, Object> data, String region) {
+        if (data == null) return;
+        try {
+            String sbd = (String) data.get("candidate_number");
+            Integer year = data.get("data_year") instanceof Integer ? (Integer) data.get("data_year") : 2025;
+            // Parse mark_info
+            List<Map<String, Object>> markInfo = (List<Map<String, Object>>) data.get("mark_info");
+            StudentScore studentScore = new StudentScore();
+            studentScore.setSbd(sbd);
+            studentScore.setExamYear(year);
+            studentScore.setRegion(region);
+            if (markInfo != null) {
+                for (Map<String, Object> m : markInfo) {
+                    String name = (String) m.get("name");
+                    String scoreStr = String.valueOf(m.get("score"));
+                    Double score = null;
+                    try { score = Double.parseDouble(scoreStr); } catch (Exception ignore) {}
+                    if (name.contains("Toán")) studentScore.setScoreMath(score);
+                    else if (name.contains("Văn")) studentScore.setScoreLiterature(score);
+                    else if (name.contains("Lý")) studentScore.setScorePhysics(score);
+                    else if (name.contains("Hóa")) studentScore.setScoreChemistry(score);
+                    else if (name.contains("Anh")) studentScore.setScoreEnglish(score);
+                    else if (name.contains("Sinh")) studentScore.setScoreBiology(score);
+                    else if (name.contains("Sử")) studentScore.setScoreHistory(score);
+                    else if (name.contains("Địa")) studentScore.setScoreGeography(score);
+                }
+            }
+            studentScoreRepository.save(studentScore);
+            // Parse blocks (tổ hợp)
+            List<Map<String, Object>> blocks = (List<Map<String, Object>>) data.get("blocks");
+            if (blocks != null) {
+                for (Map<String, Object> b : blocks) {
+                    CombinationScore comb = new CombinationScore();
+                    comb.setSbd(sbd);
+                    comb.setCombinationCode((String) b.get("value"));
+                    comb.setCombinationName((String) b.get("label"));
+                    comb.setStudentScore(studentScore);
+                    comb.setRegion(region);
+                    comb.setTotalScore(b.get("point") != null ? Double.valueOf(b.get("point").toString()) : null);
+                    // Ranking
+                    Map<String, Object> ranking = (Map<String, Object>) b.get("ranking");
+                    if (ranking != null) {
+                        comb.setStudentsWithSameScore(ranking.get("equal") != null ? Integer.valueOf(ranking.get("equal").toString()) : null);
+                        comb.setStudentsWithHigherScore(ranking.get("higher") != null ? Integer.valueOf(ranking.get("higher").toString()) : null);
+                        comb.setTotalStudentsInCombination(ranking.get("total") != null ? Integer.valueOf(ranking.get("total").toString()) : null);
+                    }
+                    // same2024
+                    if (b.get("same2024") != null) {
+                        try { comb.setEquivalentScore2024(Double.valueOf(b.get("same2024").toString())); } catch (Exception ignore) {}
+                    }
+                    combinationScoreRepository.save(comb);
+                }
+            }
+        } catch (Exception e) {
+            log.error("Error saving StudentScore from API data", e);
         }
     }
 }

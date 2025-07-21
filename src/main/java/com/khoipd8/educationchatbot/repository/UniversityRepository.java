@@ -17,7 +17,7 @@ public interface UniversityRepository extends JpaRepository<University, Long> {
     List<University> findByNameContainingIgnoreCase(String name);
 
     List<University> findByLocationContainingIgnoreCase(String location);
-    
+
     List<University> findByNameContainingIgnoreCaseOrCodeContainingIgnoreCase(String name, String code);
 
     @Query("SELECT u FROM University u JOIN FETCH u.programs WHERE u.code = :code")

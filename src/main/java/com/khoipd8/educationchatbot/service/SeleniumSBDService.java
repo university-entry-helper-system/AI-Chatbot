@@ -14,11 +14,14 @@ import org.openqa.selenium.chrome.ChromeOptions;
 import org.openqa.selenium.support.ui.WebDriverWait;
 import org.openqa.selenium.support.ui.ExpectedConditions;
 import org.openqa.selenium.support.ui.Select;
+import org.openqa.selenium.JavascriptExecutor;
+import org.openqa.selenium.NoSuchElementException;
+import org.openqa.selenium.ElementNotInteractableException;
+import org.openqa.selenium.TimeoutException;
+import org.openqa.selenium.Keys;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import io.github.bonigarcia.wdm.WebDriverManager;
-import org.openqa.selenium.JavascriptExecutor;
-
 
 import java.time.Duration;
 import java.util.*;
@@ -34,444 +37,521 @@ public class SeleniumSBDService {
     private CombinationScoreRepository combinationScoreRepository;
     
     /**
-     * 🤖 SELENIUM CRAWL - CHẮC CHẮN THÀNH CÔNG
+     * 🚀 MAIN CRAWLING METHOD - FIXED VERSION
      */
-    // SỬA LẠI METHOD crawlWithSelenium trong SeleniumSBDService.java
-
     public Map<String, Object> crawlWithSelenium(String sbd, String region) {
         WebDriver driver = null;
         Map<String, Object> result = new HashMap<>();
         
         try {
-            log.info("🤖 Starting Selenium crawl for SBD: {}", sbd);
+            log.info("🚀 Bắt đầu crawl SBD: {} với Selenium đã fix", sbd);
             
-            // Setup Chrome driver cho Windows
-            WebDriverManager.chromedriver().setup();
-            ChromeOptions options = new ChromeOptions();
+            // 1. SETUP CHROME VỚI TIẾNG VIỆT
+            driver = setupVietnameseChrome();
+            WebDriverWait shortWait = new WebDriverWait(driver, Duration.ofSeconds(10));
+            WebDriverWait longWait = new WebDriverWait(driver, Duration.ofSeconds(30));
             
-            // Cấu hình cho Windows
-            options.addArguments("--headless"); // Chạy ẩn
-            options.addArguments("--no-sandbox");
-            options.addArguments("--disable-dev-shm-usage");
-            options.addArguments("--disable-gpu");
-            options.addArguments("--disable-extensions");
-            options.addArguments("--lang=vi-VN");
-            options.addArguments("--window-size=1920,1080");
-            options.addArguments("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-            
-            driver = new ChromeDriver(options);
-            WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(20));
-            
-            // Step 1: Mở trang
+            // 2. MỞ TRANG VÀ ĐỢI LOAD HOÀN TOÀN
             driver.get("https://diemthi.tuyensinh247.com/xep-hang-thi-thptqg.html");
-            log.info("✅ Loaded page: {}", driver.getTitle());
+            log.info("✅ Đã mở trang: {}", driver.getTitle());
             
-            // Wait for page to fully load
-            Thread.sleep(3000);
+            // Đợi page load hoàn toàn và jQuery ready
+            waitForPageReady(driver, shortWait);
             
-            // Step 2: Debug - In ra toàn bộ HTML để xem cấu trúc
-            String pageSource = driver.getPageSource();
-            log.debug("Page source length: {}", pageSource.length());
-            
-            // Step 3: Tìm SBD input với nhiều cách khác nhau
-            WebElement sbdInput = null;
-            
-            // Thử nhiều selector khác nhau
-            String[] inputSelectors = {
-                "input[name='sbd']",
-                "input[placeholder*='số báo danh']", 
-                "input[placeholder*='Số báo danh']",
-                "input[placeholder*='SBD']",
-                "input[type='text']",
-                "input[id*='sbd']",
-                "input[class*='sbd']"
-            };
-            
-            for (String selector : inputSelectors) {
-                try {
-                    sbdInput = wait.until(ExpectedConditions.presenceOfElementLocated(By.cssSelector(selector)));
-                    log.info("✅ Found SBD input using selector: {}", selector);
-                    break;
-                } catch (Exception e) {
-                    log.debug("Selector failed: {}", selector);
-                }
-            }
-            
+            // 3. TÌM VÀ ĐIỀN SBD - MULTIPLE FALLBACK
+            WebElement sbdInput = findSBDInputWithFallback(driver, shortWait);
             if (sbdInput == null) {
-                log.error("❌ Could not find SBD input field");
-                result.put("status", "input_not_found");
-                result.put("message", "Không tìm thấy ô nhập SBD");
-                result.put("page_title", driver.getTitle());
-                return result;
+                return createErrorResponse("input_not_found", "Không tìm thấy ô nhập SBD", sbd);
             }
             
-            // Step 4: Nhập SBD
+            // Clear và nhập SBD
             sbdInput.clear();
             sbdInput.sendKeys(sbd);
-            log.info("✅ Entered SBD: {}", sbd);
+            Thread.sleep(500); // Cho phép input settle
             
-            // Step 5: Chọn khu vực (nếu có)
-            try {
-                WebElement regionSelect = driver.findElement(By.tagName("select"));
-                Select select = new Select(regionSelect);
-                // Thử chọn theo text
-                List<WebElement> regionOptions = select.getOptions();
-                for (WebElement option : regionOptions) {
-                    String optionText = option.getText();
-                    log.debug("Available option: {}", optionText);
-                    if (optionText.contains(region) || 
-                        optionText.toLowerCase().contains(region.toLowerCase())) {
-                        select.selectByVisibleText(optionText);
-                        log.info("✅ Selected region: {}", optionText);
-                        break;
-                    }
-                }
-            } catch (Exception e) {
-                log.debug("No region selector found: {}", e.getMessage());
+            log.info("✅ Đã nhập SBD: {}", sbd);
+            
+            // 4. CHỌN KHU VỰC NẾU CÓ
+            selectRegionIfAvailable(driver, region, shortWait);
+            
+            // 5. SUBMIT FORM - MULTIPLE METHODS
+            boolean submitSuccess = submitFormWithFallback(driver, shortWait);
+            if (!submitSuccess) {
+                return createErrorResponse("submit_failed", "Không thể submit form sau nhiều lần thử", sbd);
             }
             
-            // Step 6: Submit form bằng JavaScript
-            try {
-                ((JavascriptExecutor) driver).executeScript("document.querySelector('form').submit();");
-                log.info("✅ Form submitted via JavaScript");
-            } catch (Exception e) {
-                log.error("❌ JavaScript submit failed: {}", e.getMessage());
-                result.put("status", "submit_failed");
-                result.put("message", "Không thể submit form");
-                return result;
+            log.info("✅ Đã submit form thành công");
+            
+            // 6. ĐỢI KẾT QUẢ AJAX LOAD
+            WebElement resultsContainer = waitForResults(driver, longWait);
+            if (resultsContainer == null) {
+                return createErrorResponse("no_results", "Không có kết quả sau khi submit", sbd);
             }
-
-            // Step 7: Đợi kết quả load ĐỘNG - QUAN TRỌNG!
-            log.info("⏳ Waiting for results to load dynamically...");
-
-            WebElement resultsTable = null;
-            try {
-                // Đợi cho table kết quả xuất hiện (tối đa 15 giây)
-                resultsTable = wait.until(ExpectedConditions.presenceOfElementLocated(
-                    By.cssSelector(".ranking-table.ts247-watermark, table.ranking-table")
-                ));
-                log.info("✅ Results table appeared!");
-                
-                // Đợi thêm 2 giây để data load hoàn toàn
-                Thread.sleep(2000);
-                
-            } catch (Exception e) {
-                log.warn("⚠️ Main results table not found, trying alternative selectors...");
-                
-                // Thử các selector khác
-                String[] alternativeSelectors = {
-                    "table[class*='ranking']",
-                    "table[class*='ts247']", 
-                    "table[class*='watermark']",
-                    ".ranking-table",
-                    "table tbody tr",
-                    "table"
-                };
-                
-                for (String selector : alternativeSelectors) {
-                    try {
-                        List<WebElement> tables = driver.findElements(By.cssSelector(selector));
-                        if (!tables.isEmpty()) {
-                            resultsTable = tables.get(0);
-                            log.info("✅ Found results using selector: {}", selector);
-                            break;
-                        }
-                    } catch (Exception ignored) {}
-                }
-            }
-
-            // Step 8: Check for error messages sau khi load
-            String currentUrl = driver.getCurrentUrl();
-            String newPageSource = driver.getPageSource();
-            log.info("📄 Page after submit - URL: {}, Source length: {}", currentUrl, newPageSource.length());
-
-            // Tìm error message trong kết quả động
-            String[] errorTexts = {
-                "không tìm thấy kết quả nào phù hợp",
-                "không tìm thấy",
-                "không có dữ liệu", 
-                "không có thông tin",
-                "không có kết quả"
-            };
-
-            for (String errorText : errorTexts) {
-                if (newPageSource.toLowerCase().contains(errorText.toLowerCase())) {
-                    result.put("status", "not_found_on_website");
-                    result.put("sbd", sbd);
-                    result.put("message", "Website xác nhận không có dữ liệu cho SBD: " + sbd);
-                    return result;
-                }
-            }
-
-            // Step 9: Extract scores từ bảng kết quả ĐỘNG
-            Map<String, Double> scores = extractScoresFromDynamicTable(driver, resultsTable);
-
-            // Debug: In ra điểm tìm được
-            log.info("📊 Scores found from dynamic table: {}", scores);
-
+            
+            // 7. EXTRACT ĐIỂM SỐ TỪ KẾT QUẢ
+            Map<String, Double> scores = extractScoresAdvanced(driver, resultsContainer);
+            
             if (scores.isEmpty()) {
-                // Debug: Lưu page source để xem
-                log.error("❌ No scores found from dynamic table. Analyzing page structure...");
-                
-                // In ra structure của table để debug
-                if (resultsTable != null) {
-                    try {
-                        log.info("🔍 Table HTML: {}", resultsTable.getAttribute("outerHTML").substring(0, Math.min(500, resultsTable.getAttribute("outerHTML").length())));
-                    } catch (Exception e) {
-                        log.debug("Could not get table HTML: {}", e.getMessage());
-                    }
-                }
-                
-                result.put("status", "no_scores_found");
-                result.put("sbd", sbd);
-                result.put("message", "Không tìm thấy điểm số trong bảng kết quả");
-                result.put("page_preview", newPageSource.length() > 1000 ? 
-                        newPageSource.substring(0, 1000) + "..." : newPageSource);
-                result.put("table_found", resultsTable != null);
-                return result;
+                // Try alternative extraction methods
+                scores = extractScoresFromPageSource(driver);
             }
             
-            // Step 10: Save to database
-            StudentScore studentScore = createStudentScoreFromMap(scores, sbd, region);
-            studentScore = studentScoreRepository.save(studentScore);
-            
-            // Step 11: Create combination scores
-            List<CombinationScore> combinationScores = createCombinationScoresFromSelenium(driver, studentScore);
-            if (!combinationScores.isEmpty()) {
-                combinationScoreRepository.saveAll(combinationScores);
+            if (scores.isEmpty()) {
+                return createErrorResponse("no_scores_extracted", "Không extract được điểm số", sbd);
             }
             
-            // Step 12: Format response
-            result = formatCrawledData(studentScore, combinationScores);
-            result.put("source", "selenium_crawl");
-            result.put("crawl_success", true);
+            log.info("✅ Đã extract được {} điểm số: {}", scores.size(), scores);
+            
+            // 8. LUU VÀO DATABASE
+            StudentScore studentScore = createAndSaveStudentScore(scores, sbd, region);
+            List<CombinationScore> combinationScores = createAndSaveCombinationScores(driver, studentScore);
+            
+            // 9. TRẢ VỀ KẾT QUẢ
+            result = formatSuccessResponse(studentScore, combinationScores);
+            result.put("extraction_method", "selenium_fixed");
             result.put("scores_found", scores);
-            result.put("debug_info", Map.of(
-                "page_title", driver.getTitle(),
-                "final_url", driver.getCurrentUrl(),
-                "scores_extracted", scores.size(),
-                "combinations_created", combinationScores.size()
-            ));
             
-            log.info("🎉 Selenium crawl SUCCESS for SBD: {} - Found {} scores", sbd, scores.size());
+            log.info("🎉 THÀNH CÔNG crawl SBD: {} - Tìm thấy {} điểm", sbd, scores.size());
             
             return result;
             
         } catch (Exception e) {
-            log.error("❌ Selenium crawl failed for SBD: {}", sbd, e);
-            result.put("status", "selenium_error");
-            result.put("sbd", sbd);
-            result.put("message", "Lỗi Selenium: " + e.getMessage());
-            result.put("error_type", e.getClass().getSimpleName());
-            
-            // Thêm thông tin debug
-            if (driver != null) {
-                try {
-                    result.put("current_url", driver.getCurrentUrl());
-                    result.put("page_title", driver.getTitle());
-                } catch (Exception ex) {
-                    // Ignore
-                }
-            }
-            
-            return result;
+            log.error("❌ Lỗi crawl SBD: {}", sbd, e);
+            return createErrorResponse("selenium_error", "Lỗi Selenium: " + e.getMessage(), sbd);
             
         } finally {
             if (driver != null) {
                 try {
                     driver.quit();
-                    log.info("✅ Chrome driver closed");
+                    log.info("✅ Đã đóng Chrome driver");
                 } catch (Exception e) {
-                    log.warn("Warning closing driver: {}", e.getMessage());
+                    log.warn("Cảnh báo đóng driver: {}", e.getMessage());
                 }
             }
         }
     }
     
     /**
-     * Extract điểm số từ page sử dụng Selenium
+     * 🔧 SETUP CHROME VỚI CẤU HÌNH TIẾNG VIỆT
      */
-    private Map<String, Double> extractScoresFromSelenium(WebDriver driver) {
-        Map<String, Double> scores = new HashMap<>();
+    private WebDriver setupVietnameseChrome() {
+            WebDriverManager.chromedriver().setup();
+            ChromeOptions options = new ChromeOptions();
+            
+        // Cấu hình ngôn ngữ tiếng Việt
+            options.addArguments("--lang=vi-VN");
+        options.addArguments("--disable-blink-features=AutomationControlled");
+        options.addArguments("--disable-web-security");
+        options.addArguments("--disable-features=VizDisplayCompositor");
         
+        // Cấu hình headless nhưng vẫn functional
+        options.addArguments("--headless=new");
+            options.addArguments("--window-size=1920,1080");
+        options.addArguments("--no-sandbox");
+        options.addArguments("--disable-dev-shm-usage");
+        
+        // User agent chuẩn
+            options.addArguments("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+            
+        // Preferences cho tiếng Việt
+        Map<String, Object> prefs = new HashMap<>();
+        prefs.put("intl.accept_languages", "vi-VN,vi,en-US,en");
+        prefs.put("profile.default_content_setting_values.notifications", 2);
+        options.setExperimentalOption("prefs", prefs);
+        
+        // Tắt automation flags
+        options.setExperimentalOption("useAutomationExtension", false);
+        options.addArguments("--disable-extensions");
+        
+        return new ChromeDriver(options);
+    }
+    
+    /**
+     * ⏳ ĐỢI PAGE READY VÀ JQUERY LOAD
+     */
+    private void waitForPageReady(WebDriver driver, WebDriverWait wait) throws InterruptedException {
+        // Đợi document ready
+        wait.until(webDriver -> 
+            ((JavascriptExecutor) webDriver).executeScript("return document.readyState").equals("complete")
+        );
+        
+        // Đợi jQuery load (nếu có)
         try {
-            String pageSource = driver.getPageSource();
-            log.debug("Extracting scores from page source length: {}", pageSource.length());
+            wait.until(webDriver -> {
+                Object result = ((JavascriptExecutor) webDriver)
+                    .executeScript("return typeof jQuery !== 'undefined' && jQuery.active === 0");
+                return Boolean.TRUE.equals(result);
+            });
+            log.debug("✅ jQuery đã sẵn sàng");
+        } catch (TimeoutException e) {
+            log.debug("⚠️ jQuery không có hoặc vẫn đang active");
+        }
+        
+        // Extra wait cho các element dynamic
+        Thread.sleep(2000);
+    }
+    
+    /**
+     * 🔍 TÌM INPUT SBD VỚI MULTIPLE FALLBACK
+     */
+    private WebElement findSBDInputWithFallback(WebDriver driver, WebDriverWait wait) {
+        String[] selectors = {
+                "input[name='sbd']",
+                "input[placeholder*='số báo danh']", 
+                "input[placeholder*='Số báo danh']",
+                "input[placeholder*='SBD']",
+            "input[id*='sbd' i]",
+            "input[class*='sbd']",
+            "input[type='text']:first-of-type",
+            ".block-search-bg input[type='text']",
+            "form input[type='text']"
+        };
+        
+        for (String selector : selectors) {
+            try {
+                WebElement element = wait.until(ExpectedConditions.presenceOfElementLocated(By.cssSelector(selector)));
+                if (element.isEnabled() && element.isDisplayed()) {
+                    log.info("✅ Tìm thấy SBD input với selector: {}", selector);
+                    return element;
+                }
+            } catch (TimeoutException e) {
+                    log.debug("Selector failed: {}", selector);
+                }
+            }
             
-            // Pattern 1: Tìm text patterns như "Môn Toán: 4.75" 
-            extractScoresFromPageText(pageSource, scores);
+        log.error("❌ Không tìm thấy input SBD với bất kỳ selector nào");
+        return null;
+    }
+    
+    /**
+     * 🌏 CHỌN KHU VỰC NẾU CÓ
+     */
+    private void selectRegionIfAvailable(WebDriver driver, String region, WebDriverWait wait) {
+            try {
+                WebElement regionSelect = driver.findElement(By.tagName("select"));
+                Select select = new Select(regionSelect);
+                
+                List<WebElement> options = select.getOptions();
+            log.debug("Các tùy chọn khu vực có sẵn:");
             
-            // Pattern 2: Tìm trong các elements có thể chứa điểm
-            extractScoresFromElements(driver, scores);
+                for (WebElement option : options) {
+                    String optionText = option.getText();
+                log.debug("- {}", optionText);
+                
+                if (optionText.toLowerCase().contains(region.toLowerCase()) ||
+                    region.toLowerCase().contains(optionText.toLowerCase())) {
+                        select.selectByVisibleText(optionText);
+                    log.info("✅ Đã chọn khu vực: {}", optionText);
+                    return;
+                }
+            }
             
-            // Pattern 3: Tìm trong orange/colored boxes (như screenshot)
-            extractScoresFromColoredBoxes(driver, scores);
+            // Fallback: chọn "Toàn quốc" nếu có
+            for (WebElement option : options) {
+                if (option.getText().contains("Toàn quốc")) {
+                    select.selectByVisibleText(option.getText());
+                    log.info("✅ Fallback chọn khu vực: {}", option.getText());
+                    return;
+                }
+            }
             
-            // Pattern 4: Regex pattern matching trên toàn bộ page
-            extractScoresWithRegex(pageSource, scores);
+        } catch (NoSuchElementException e) {
+            log.debug("⚠️ Không có dropdown khu vực");
+        }
+    }
+    
+    /**
+     * 📤 SUBMIT FORM VỚI MULTIPLE FALLBACK METHODS
+     */
+    private boolean submitFormWithFallback(WebDriver driver, WebDriverWait wait) throws InterruptedException {
+        
+        // METHOD 1: Click vào button submit
+        if (tryClickSubmitButton(driver, wait)) {
+            return true;
+        }
+        
+        // METHOD 2: Press Enter trên input
+        if (tryEnterKeySubmission(driver)) {
+            return true;
+        }
+        
+        // METHOD 3: Fix jQuery conflict rồi submit
+        if (tryFixJQueryConflictAndSubmit(driver)) {
+            return true;
+        }
+        
+        // METHOD 4: Direct JavaScript form submission
+        if (tryJavaScriptFormSubmission(driver)) {
+            return true;
+        }
+        
+        log.error("❌ Tất cả phương thức submit đều thất bại");
+        return false;
+    }
+    
+    private boolean tryClickSubmitButton(WebDriver driver, WebDriverWait wait) {
+        try {
+            String[] buttonSelectors = {
+                "button[type='submit']",
+                "input[type='submit']",
+                "button:contains('Xem xếp hạng')",
+                "input[value*='Xem']",
+                "input[value*='xem']",
+                ".btn-submit",
+                ".submit-btn",
+                "form button",
+                "form input[type='button']"
+            };
             
-            log.info("📊 Total scores extracted: {}", scores.size());
-            for (Map.Entry<String, Double> entry : scores.entrySet()) {
-                log.info("   {} = {}", entry.getKey(), entry.getValue());
+            for (String selector : buttonSelectors) {
+                try {
+                    WebElement submitBtn = wait.until(ExpectedConditions.elementToBeClickable(
+                        By.cssSelector(selector)
+                    ));
+                    
+                    // Scroll to element
+                    ((JavascriptExecutor) driver).executeScript("arguments[0].scrollIntoView(true);", submitBtn);
+                    Thread.sleep(500);
+                    
+                    submitBtn.click();
+                    log.info("✅ Đã click submit button với selector: {}", selector);
+                    Thread.sleep(1000);
+                    return true;
+            
+        } catch (Exception e) {
+                    log.debug("Button selector failed: {} - {}", selector, e.getMessage());
+                }
+            }
+        } catch (Exception e) {
+            log.debug("Method 1 (Click button) failed: {}", e.getMessage());
+        }
+        return false;
+    }
+    
+    private boolean tryEnterKeySubmission(WebDriver driver) {
+        try {
+            WebElement sbdInput = driver.findElement(By.cssSelector("input[type='text']"));
+            sbdInput.sendKeys(Keys.ENTER);
+            log.info("✅ Đã nhấn Enter để submit");
+            Thread.sleep(1000);
+            return true;
+                } catch (Exception e) {
+            log.debug("Method 2 (Enter key) failed: {}", e.getMessage());
+            return false;
+        }
+    }
+    
+    private boolean tryFixJQueryConflictAndSubmit(WebDriver driver) {
+        try {
+            JavascriptExecutor js = (JavascriptExecutor) driver;
+            
+            // Fix jQuery name conflict
+            js.executeScript(
+                "var submitInputs = document.querySelectorAll('input[name=\"submit\"]');" +
+                "for(var i = 0; i < submitInputs.length; i++) {" +
+                "    submitInputs[i].removeAttribute('name');" +
+                "}"
+            );
+            
+            Thread.sleep(500);
+            
+            // Tìm và click button sau khi fix conflict
+            WebElement submitBtn = driver.findElement(By.cssSelector("input[type='submit'], button[type='submit']"));
+            submitBtn.click();
+            
+            log.info("✅ Đã fix jQuery conflict và submit");
+            Thread.sleep(1000);
+            return true;
+            
+        } catch (Exception e) {
+            log.debug("Method 3 (Fix jQuery conflict) failed: {}", e.getMessage());
+            return false;
+        }
+    }
+    
+    private boolean tryJavaScriptFormSubmission(WebDriver driver) {
+        try {
+            JavascriptExecutor js = (JavascriptExecutor) driver;
+            
+            // Try multiple JavaScript approaches
+            String[] jsScripts = {
+                "document.forms[0].submit();",
+                "document.querySelector('form').submit();",
+                "document.getElementById('form').submit();",
+                "jQuery('form').submit();"
+            };
+            
+            for (String script : jsScripts) {
+                try {
+                    js.executeScript(script);
+                    log.info("✅ JavaScript form submission success với script: {}", script);
+                    Thread.sleep(1000);
+                    return true;
+                } catch (Exception e) {
+                    log.debug("JS script failed: {} - {}", script, e.getMessage());
+                }
             }
             
         } catch (Exception e) {
-            log.error("Error in extractScoresFromSelenium: {}", e.getMessage(), e);
+            log.debug("Method 4 (JavaScript submission) failed: {}", e.getMessage());
+        }
+        return false;
+    }
+    
+    /**
+     * ⏳ ĐỢI KẾT QUẢ AJAX LOAD
+     */
+    private WebElement waitForResults(WebDriver driver, WebDriverWait longWait) {
+        try {
+            log.info("⏳ Đang đợi kết quả AJAX load...");
+            
+            // Đợi jQuery AJAX hoàn thành
+            try {
+                longWait.until(webDriver -> {
+                    Object active = ((JavascriptExecutor) webDriver)
+                        .executeScript("return typeof jQuery !== 'undefined' ? jQuery.active : 0");
+                    return Integer.valueOf(0).equals(active);
+                });
+                log.debug("✅ jQuery AJAX đã hoàn thành");
+            } catch (Exception e) {
+                log.debug("⚠️ jQuery check failed, tiếp tục...");
+            }
+            
+            // Đợi results container xuất hiện
+            String[] resultSelectors = {
+                ".exam-score-ranking",
+                ".ranking-result", 
+                ".ranking-table.ts247-watermark",
+                "table.ranking-table",
+                ".result-container",
+                "table tbody tr",
+                "table"
+            };
+            
+            WebElement resultsElement = null;
+            for (String selector : resultSelectors) {
+                try {
+                    resultsElement = longWait.until(
+                        ExpectedConditions.presenceOfElementLocated(By.cssSelector(selector))
+                    );
+                    log.info("✅ Tìm thấy kết quả với selector: {}", selector);
+                    
+                    // Kiểm tra element có content không
+                    String elementText = resultsElement.getText();
+                    if (elementText != null && elementText.trim().length() > 50) {
+                        log.info("✅ Results element có nội dung (length: {})", elementText.length());
+                        Thread.sleep(2000); // Đợi content load fully
+                        return resultsElement;
+                    }
+                    
+                } catch (TimeoutException e) {
+                    log.debug("Result selector timeout: {}", selector);
+                }
+            }
+            
+            if (resultsElement != null) {
+                return resultsElement;
+            }
+            
+        } catch (Exception e) {
+            log.error("Lỗi đợi kết quả: {}", e.getMessage());
+        }
+        
+        log.error("❌ Không tìm thấy kết quả sau khi submit");
+        return null;
+    }
+    
+    /**
+     * 🔍 EXTRACT ĐIỂM SỐ ADVANCED
+     */
+    private Map<String, Double> extractScoresAdvanced(WebDriver driver, WebElement resultsContainer) {
+        Map<String, Double> scores = new HashMap<>();
+        
+        try {
+            // METHOD 1: Extract từ table structure
+            extractScoresFromTable(resultsContainer, scores);
+            
+            if (!scores.isEmpty()) {
+                log.info("✅ Extracted {} scores from table", scores.size());
+                return scores;
+            }
+            
+            // METHOD 2: Extract từ text content của container
+            String containerText = resultsContainer.getText();
+            extractScoresFromText(containerText, scores);
+            
+            if (!scores.isEmpty()) {
+                log.info("✅ Extracted {} scores from text", scores.size());
+                return scores;
+            }
+            
+            // METHOD 3: Extract từ tất cả elements con
+            List<WebElement> allElements = resultsContainer.findElements(By.xpath(".//*"));
+            for (WebElement element : allElements) {
+                String text = element.getText().trim();
+                if (!text.isEmpty() && containsScorePattern(text)) {
+                    extractScoresFromText(text, scores);
+                }
+            }
+            
+            log.info("✅ Total extracted {} scores", scores.size());
+            
+        } catch (Exception e) {
+            log.error("Lỗi extract điểm advanced: {}", e.getMessage());
         }
         
         return scores;
     }
-    private void extractScoresFromPageText(String pageSource, Map<String, Double> scores) {
+    
+    private void extractScoresFromTable(WebElement tableContainer, Map<String, Double> scores) {
         try {
-            // Split into lines and look for score patterns
-            String[] lines = pageSource.split("\\n");
+            List<WebElement> rows = tableContainer.findElements(By.tagName("tr"));
+            log.debug("Tìm thấy {} rows trong table", rows.size());
             
-            for (String line : lines) {
-                String cleanLine = line.replaceAll("<[^>]*>", "").trim(); // Remove HTML tags
+            for (int i = 0; i < rows.size(); i++) {
+                WebElement row = rows.get(i);
+                List<WebElement> cells = row.findElements(By.tagName("td"));
                 
-                if (cleanLine.toLowerCase().contains("môn") && 
-                    cleanLine.matches(".*[0-9]+[\\.,][0-9]+.*")) {
+                if (cells.size() >= 2) {
+                    String cellText = row.getText().trim();
+                    log.debug("Row {}: {}", i, cellText);
                     
-                    extractScoreFromText(cleanLine, scores);
+                    extractScoreFromRowText(cellText, scores);
                 }
             }
         } catch (Exception e) {
-            log.debug("Error extracting from page text: {}", e.getMessage());
-        }
-    }
-
-    private void extractScoresFromElements(WebDriver driver, Map<String, Double> scores) {
-        try {
-            // Tìm tất cả elements có thể chứa điểm
-            String[] possibleSelectors = {
-                "td", "div", "span", "p", "li", 
-                ".score", ".result", ".grade", 
-                "[class*='diem']", "[class*='score']",
-                "[id*='diem']", "[id*='score']"
-            };
-            
-            for (String selector : possibleSelectors) {
-                try {
-                    List<WebElement> elements = driver.findElements(By.cssSelector(selector));
-                    
-                    for (WebElement element : elements) {
-                        String text = element.getText().trim();
-                        if (!text.isEmpty() && 
-                            text.toLowerCase().contains("môn") && 
-                            text.matches(".*[0-9]+[\\.,][0-9]+.*")) {
-                            
-                            extractScoreFromText(text, scores);
-                        }
-                    }
-                } catch (Exception e) {
-                    log.debug("Selector {} failed: {}", selector, e.getMessage());
-                }
-            }
-        } catch (Exception e) {
-            log.debug("Error extracting from elements: {}", e.getMessage());
-        }
-    }
-
-    private void extractScoresFromColoredBoxes(WebDriver driver, Map<String, Double> scores) {
-        try {
-            // Tìm boxes có background color (như orange box trong screenshot)
-            List<WebElement> coloredElements = driver.findElements(
-                By.xpath("//*[contains(@style, 'background') or contains(@style, 'color')]")
-            );
-            
-            for (WebElement element : coloredElements) {
-                String text = element.getText().trim();
-                String style = element.getAttribute("style");
-                
-                if (!text.isEmpty() && 
-                    (style.contains("orange") || style.contains("#f") || style.contains("rgb")) &&
-                    text.matches(".*[0-9]+[\\.,][0-9]+.*")) {
-                    
-                    extractScoreFromText(text, scores);
-                }
-            }
-        } catch (Exception e) {
-            log.debug("Error extracting from colored boxes: {}", e.getMessage());
+            log.debug("Lỗi extract từ table: {}", e.getMessage());
         }
     }
     
-    private void extractScoresWithRegex(String pageSource, Map<String, Double> scores) {
-        try {
-            // Clean HTML từ page source
-            String cleanText = pageSource.replaceAll("<[^>]*>", " ").replaceAll("\\s+", " ");
-            
-            // Specific patterns cho từng môn học
-            Map<String, String[]> subjectPatterns = new HashMap<>();
-            subjectPatterns.put("toán", new String[]{"toán", "math"});
-            subjectPatterns.put("văn", new String[]{"văn", "ngữ văn", "literature"});
-            subjectPatterns.put("lý", new String[]{"lý", "vật lí", "physics"});
-            subjectPatterns.put("hóa", new String[]{"hóa", "hóa học", "chemistry"});
-            subjectPatterns.put("anh", new String[]{"anh", "tiếng anh", "english"});
-            subjectPatterns.put("sinh", new String[]{"sinh", "sinh học", "biology"});
-            subjectPatterns.put("sử", new String[]{"sử", "lịch sử", "history"});
-            subjectPatterns.put("địa", new String[]{"địa", "địa lí", "geography"});
-            
-            for (Map.Entry<String, String[]> entry : subjectPatterns.entrySet()) {
-                String subject = entry.getKey();
-                String[] patterns = entry.getValue();
-                
-                for (String pattern : patterns) {
-                    // Pattern: "Môn Toán: 4.75" hoặc "Toán 4.75"
-                    String regex = "(?i)(?:môn\\s+)?" + pattern + "\\s*[:\\-]?\\s*([0-9]+[\\.,][0-9]+)";
-                    java.util.regex.Pattern p = java.util.regex.Pattern.compile(regex);
-                    java.util.regex.Matcher m = p.matcher(cleanText);
-                    
-                    if (m.find()) {
-                        try {
-                            String scoreStr = m.group(1).replace(",", ".");
-                            double score = Double.parseDouble(scoreStr);
-                            if (score >= 0 && score <= 10) {
-                                scores.put(subject, score);
-                                log.debug("Regex extracted: {} = {}", subject, score);
-                                break; // Đã tìm thấy, không cần thử pattern khác
-                            }
-                        } catch (NumberFormatException e) {
-                            log.debug("Could not parse score: {}", m.group(1));
-                        }
-                    }
-                }
-            }
-        } catch (Exception e) {
-            log.debug("Error in regex extraction: {}", e.getMessage());
-        }
-    }
-    
-    // Cải thiện method extractScoreFromText
-    private void extractScoreFromText(String text, Map<String, Double> scores) {
-        if (text == null || text.trim().isEmpty()) return;
+    private void extractScoreFromRowText(String rowText, Map<String, Double> scores) {
+        if (rowText == null || rowText.trim().isEmpty()) return;
         
-        try {
-            String lowerText = text.toLowerCase();
-            
-            // Map các môn học
+        // Map môn học
             Map<String, String[]> subjects = new HashMap<>();
-            subjects.put("toán", new String[]{"toán", "math"});
-            subjects.put("văn", new String[]{"văn", "ngữ văn", "literature"});
-            subjects.put("lý", new String[]{"lý", "vật lí", "physics"});
-            subjects.put("hóa", new String[]{"hóa", "hóa học", "chemistry"});
-            subjects.put("anh", new String[]{"anh", "tiếng anh", "english"});
-            subjects.put("sinh", new String[]{"sinh", "sinh học", "biology"});
-            subjects.put("sử", new String[]{"sử", "lịch sử", "history"});
-            subjects.put("địa", new String[]{"địa", "địa lí", "geography"});
+        subjects.put("toán", new String[]{"toán", "môn toán", "math"});
+        subjects.put("văn", new String[]{"văn", "môn văn", "ngữ văn", "literature"});
+        subjects.put("lý", new String[]{"lý", "môn lý", "vật lí", "physics"});
+        subjects.put("hóa", new String[]{"hóa", "môn hóa", "hóa học", "chemistry"});
+        subjects.put("anh", new String[]{"anh", "môn anh", "tiếng anh", "english"});
+        subjects.put("sinh", new String[]{"sinh", "môn sinh", "sinh học", "biology"});
+        subjects.put("sử", new String[]{"sử", "môn sử", "lịch sử", "history"});
+        subjects.put("địa", new String[]{"địa", "môn địa", "địa lí", "geography"});
+        
+        String lowerText = rowText.toLowerCase();
             
             for (Map.Entry<String, String[]> entry : subjects.entrySet()) {
                 String subjectKey = entry.getKey();
                 String[] patterns = entry.getValue();
                 
-                // Skip nếu đã có điểm cho môn này
-                if (scores.containsKey(subjectKey)) continue;
+            if (scores.containsKey(subjectKey)) continue; // Skip if already found
                 
                 for (String pattern : patterns) {
                     if (lowerText.contains(pattern)) {
                         // Tìm số sau tên môn học
-                        String regex = pattern + "\\s*[:\\-]?\\s*([0-9]+[\\.,]?[0-9]*)";
+                    String regex = pattern.replace(" ", "\\s*") + "\\s*[:\\-]?\\s*([0-9]+[\\.,]?[0-9]*)";
                         java.util.regex.Pattern p = java.util.regex.Pattern.compile(regex, java.util.regex.Pattern.CASE_INSENSITIVE);
-                        java.util.regex.Matcher m = p.matcher(text);
+                    java.util.regex.Matcher m = p.matcher(rowText);
                         
                         if (m.find()) {
                             try {
@@ -479,74 +559,78 @@ public class SeleniumSBDService {
                                 double score = Double.parseDouble(scoreStr);
                                 if (score >= 0 && score <= 10) {
                                     scores.put(subjectKey, score);
-                                    log.debug("Text extracted: {} = {} from: {}", subjectKey, score, text.substring(0, Math.min(100, text.length())));
+                                log.debug("✅ Found score: {} = {}", subjectKey, score);
                                     break;
                                 }
                             } catch (NumberFormatException e) {
-                                log.debug("Could not parse score from: {}", m.group(1));
+                            log.debug("Could not parse score: {}", m.group(1));
                             }
                         }
                         break;
                     }
                 }
             }
-        } catch (Exception e) {
-            log.debug("Error in extractScoreFromText: {}", e.getMessage());
-        }
     }
     
-    // private void extractScoreFromText(String text, Map<String, Double> scores) {
-    //     if (text == null || text.trim().isEmpty()) return;
-        
-    //     // Patterns for Vietnamese subjects
-    //     String[][] patterns = {
-    //         {"toán", "math"},
-    //         {"văn", "literature", "ngữ văn"},
-    //         {"lý", "physics", "vật lí"},
-    //         {"hóa", "chemistry", "hóa học"},
-    //         {"anh", "english", "tiếng anh"},
-    //         {"sinh", "biology", "sinh học"},
-    //         {"sử", "history", "lịch sử"},
-    //         {"địa", "geography", "địa lí"}
-    //     };
-        
-    //     for (String[] subjectPatterns : patterns) {
-    //         for (String pattern : subjectPatterns) {
-    //             if (text.toLowerCase().contains(pattern)) {
-    //                 // Extract number after subject name
-    //                 String regex = pattern + "\\s*[:\\-]?\\s*([0-9]+[\\.,]?[0-9]*)";
-    //                 java.util.regex.Pattern p = java.util.regex.Pattern.compile(regex, java.util.regex.Pattern.CASE_INSENSITIVE);
-    //                 java.util.regex.Matcher m = p.matcher(text);
-    //                 if (m.find()) {
-    //                     try {
-    //                         String scoreStr = m.group(1).replace(",", ".");
-    //                         double score = Double.parseDouble(scoreStr);
-    //                         if (score >= 0 && score <= 10) {
-    //                             scores.put(subjectPatterns[0], score); // Use primary name
-    //                         }
-    //                     } catch (NumberFormatException e) {
-    //                         // Ignore
-    //                     }
-    //                 }
-    //                 break;
-    //             }
-    //         }
-    //     }
-    // }
-    
-    private void extractAllScoresFromPageSource(String pageSource, Map<String, Double> scores) {
-        // Extract từ page source HTML
-        String[] lines = pageSource.split("\n");
+    private void extractScoresFromText(String text, Map<String, Double> scores) {
+        // Sử dụng regex để tìm pattern điểm số
+        String[] lines = text.split("\\n");
         for (String line : lines) {
-            if (line.toLowerCase().contains("môn") && 
-                line.matches(".*[0-9]+[\\.,][0-9]+.*")) {
-                extractScoreFromText(line, scores);
+            if (containsScorePattern(line)) {
+                extractScoreFromRowText(line, scores);
             }
         }
     }
     
-    // Helper methods tương tự như trong SBDLookupService...
-    private StudentScore createStudentScoreFromMap(Map<String, Double> scores, String sbd, String region) {
+    private boolean containsScorePattern(String text) {
+        if (text == null) return false;
+        String lower = text.toLowerCase();
+        return (lower.contains("môn") || lower.contains("toán") || lower.contains("văn") || 
+                lower.contains("lý") || lower.contains("hóa")) && 
+               text.matches(".*[0-9]+[\\.,][0-9]+.*");
+    }
+    
+    /**
+     * 🔍 FALLBACK: EXTRACT TỪ PAGE SOURCE
+     */
+    private Map<String, Double> extractScoresFromPageSource(WebDriver driver) {
+        Map<String, Double> scores = new HashMap<>();
+        
+        try {
+            String pageSource = driver.getPageSource();
+            log.debug("Fallback extracting from page source (length: {})", pageSource.length());
+            
+            // Clean HTML và split thành lines
+            String cleanText = pageSource.replaceAll("<[^>]*>", " ").replaceAll("\\s+", " ");
+            String[] lines = cleanText.split("\\.");
+            
+        for (String line : lines) {
+                if (containsScorePattern(line)) {
+                    extractScoreFromRowText(line, scores);
+                }
+            }
+            
+            log.info("Fallback extracted {} scores from page source", scores.size());
+            
+        } catch (Exception e) {
+            log.error("Lỗi fallback extraction: {}", e.getMessage());
+        }
+        
+        return scores;
+    }
+    
+    // ======= HELPER METHODS =======
+    
+    private Map<String, Object> createErrorResponse(String status, String message, String sbd) {
+        Map<String, Object> response = new HashMap<>();
+        response.put("status", status);
+        response.put("message", message);
+        response.put("sbd", sbd);
+        response.put("timestamp", System.currentTimeMillis());
+        return response;
+    }
+    
+    private StudentScore createAndSaveStudentScore(Map<String, Double> scores, String sbd, String region) {
         StudentScore studentScore = new StudentScore();
         studentScore.setSbd(sbd);
         studentScore.setExamYear(2025);
@@ -561,19 +645,13 @@ public class SeleniumSBDService {
         studentScore.setScoreHistory(scores.get("sử"));
         studentScore.setScoreGeography(scores.get("địa"));
         
-        return studentScore;
+        return studentScoreRepository.save(studentScore);
     }
-
-    // BỔ SUNG VÀO CUỐI FILE SeleniumSBDService.java
-
-    /**
-     * Tạo combination scores từ Selenium data
-     */
-    private List<CombinationScore> createCombinationScoresFromSelenium(WebDriver driver, StudentScore studentScore) {
+    
+    private List<CombinationScore> createAndSaveCombinationScores(WebDriver driver, StudentScore studentScore) {
         List<CombinationScore> combinationScores = new ArrayList<>();
         
-        try {
-            // Determine eligible combinations from scores
+        // Determine eligible combinations từ điểm số
             List<String> eligibleCombinations = determineEligibleCombinations(studentScore);
             
             for (String combCode : eligibleCombinations) {
@@ -590,277 +668,24 @@ public class SeleniumSBDService {
                     combScore.setTotalScore(totalScore);
                     
                     if (totalScore != null) {
-                        // Try to extract ranking from page
-                        extractRankingFromSeleniumPage(driver, combScore, combCode);
-                        
-                        // If no ranking found, estimate
-                        if (combScore.getStudentsWithHigherScore() == null) {
+                    // Estimate ranking data
                             estimateRankingData(combScore, totalScore, combCode);
-                        }
-                        
                         combinationScores.add(combScore);
                     }
                     
                 } catch (Exception e) {
-                    log.debug("Error creating combination score for {}: {}", combCode, e.getMessage());
+                log.debug("Lỗi tạo combination score cho {}: {}", combCode, e.getMessage());
                 }
             }
             
-        } catch (Exception e) {
-            log.error("Error creating combination scores from Selenium: {}", e.getMessage());
+        if (!combinationScores.isEmpty()) {
+            combinationScoreRepository.saveAll(combinationScores);
         }
         
         return combinationScores;
     }
     
-    /**
-     * Extract ranking info từ Selenium page
-     */
-    private void extractRankingFromSeleniumPage(WebDriver driver, CombinationScore combScore, String combCode) {
-        try {
-            // Look for ranking data on page
-            List<WebElement> rankingElements = driver.findElements(
-                By.xpath("//*[contains(text(), '" + combCode + "')]")
-            );
-            
-            for (WebElement element : rankingElements) {
-                String text = element.getText();
-                if (text.contains(combCode)) {
-                    // Try to extract ranking numbers
-                    extractRankingFromText(text, combScore);
-                }
-            }
-            
-            // Look for total score display
-            List<WebElement> scoreElements = driver.findElements(
-                By.xpath("//*[contains(text(), 'Điểm') or contains(text(), 'điểm')]")
-            );
-            
-            for (WebElement element : scoreElements) {
-                String text = element.getText();
-                if (text.contains(combCode) && text.matches(".*[0-9]+[\\.,][0-9]+.*")) {
-                    // Extract score from element
-                    extractScoreFromCombinationText(text, combScore);
-                }
-            }
-            
-        } catch (Exception e) {
-            log.debug("Error extracting ranking from Selenium page: {}", e.getMessage());
-        }
-    }
-    
-    private void extractRankingFromText(String text, CombinationScore combScore) {
-        try {
-            // Pattern: "có điểm bằng: 618"
-            if (text.contains("điểm bằng") || text.contains("cùng điểm")) {
-                String pattern = "(?:điểm bằng|cùng điểm)[^0-9]*([0-9.,]+)";
-                java.util.regex.Pattern p = java.util.regex.Pattern.compile(pattern);
-                java.util.regex.Matcher m = p.matcher(text);
-                if (m.find()) {
-                    String numberStr = m.group(1).replaceAll("[^0-9]", "");
-                    combScore.setStudentsWithSameScore(Integer.parseInt(numberStr));
-                }
-            }
-            
-            // Pattern: "điểm cao hơn: 136.977"
-            if (text.contains("cao hơn") || text.contains("lớn hơn")) {
-                String pattern = "(?:cao hơn|lớn hơn)[^0-9]*([0-9.,]+)";
-                java.util.regex.Pattern p = java.util.regex.Pattern.compile(pattern);
-                java.util.regex.Matcher m = p.matcher(text);
-                if (m.find()) {
-                    String numberStr = m.group(1).replaceAll("[^0-9]", "");
-                    combScore.setStudentsWithHigherScore(Integer.parseInt(numberStr));
-                }
-            }
-            
-            // Pattern: "tổng số: 162200"
-            if (text.contains("tổng số") || text.contains("trong khối")) {
-                String pattern = "(?:tổng số|trong khối)[^0-9]*([0-9.,]+)";
-                java.util.regex.Pattern p = java.util.regex.Pattern.compile(pattern);
-                java.util.regex.Matcher m = p.matcher(text);
-                if (m.find()) {
-                    String numberStr = m.group(1).replaceAll("[^0-9]", "");
-                    combScore.setTotalStudentsInCombination(Integer.parseInt(numberStr));
-                }
-            }
-            
-        } catch (Exception e) {
-            log.debug("Error extracting ranking from text: {}", e.getMessage());
-        }
-    }
-    
-    private void extractScoreFromCombinationText(String text, CombinationScore combScore) {
-        try {
-            // Extract total score for combination
-            String pattern = "([0-9]+[\\.,][0-9]+)\\s*(?:Điểm|điểm)";
-            java.util.regex.Pattern p = java.util.regex.Pattern.compile(pattern);
-            java.util.regex.Matcher m = p.matcher(text);
-            if (m.find()) {
-                String scoreStr = m.group(1).replace(",", ".");
-                Double score = Double.parseDouble(scoreStr);
-                if (combScore.getTotalScore() == null) {
-                    combScore.setTotalScore(score);
-                }
-            }
-        } catch (Exception e) {
-            log.debug("Error extracting score from combination text: {}", e.getMessage());
-        }
-    }
-    
-    // COPY CÁC HELPER METHODS TỪ SBDLookupService
-    
-    private List<String> determineEligibleCombinations(StudentScore score) {
-        List<String> combinations = new ArrayList<>();
-        
-        // A00: Toán, Lý, Hóa
-        if (hasScores(score.getScoreMath(), score.getScorePhysics(), score.getScoreChemistry())) {
-            combinations.add("A00");
-        }
-        
-        // A01: Toán, Lý, Anh
-        if (hasScores(score.getScoreMath(), score.getScorePhysics(), score.getScoreEnglish())) {
-            combinations.add("A01");
-        }
-        
-        // B00: Toán, Hóa, Sinh
-        if (hasScores(score.getScoreMath(), score.getScoreChemistry(), score.getScoreBiology())) {
-            combinations.add("B00");
-        }
-        
-        // C00: Văn, Sử, Địa
-        if (hasScores(score.getScoreLiterature(), score.getScoreHistory(), score.getScoreGeography())) {
-            combinations.add("C00");
-        }
-        
-        // C01: Văn, Toán, Lý
-        if (hasScores(score.getScoreLiterature(), score.getScoreMath(), score.getScorePhysics())) {
-            combinations.add("C01");
-        }
-        
-        // C02: Văn, Toán, Hóa
-        if (hasScores(score.getScoreLiterature(), score.getScoreMath(), score.getScoreChemistry())) {
-            combinations.add("C02");
-        }
-        
-        // D01: Văn, Toán, Anh
-        if (hasScores(score.getScoreLiterature(), score.getScoreMath(), score.getScoreEnglish())) {
-            combinations.add("D01");
-        }
-        
-        // D07: Toán, Hóa, Anh
-        if (hasScores(score.getScoreMath(), score.getScoreChemistry(), score.getScoreEnglish())) {
-            combinations.add("D07");
-        }
-        
-        return combinations;
-    }
-    
-    private boolean hasScores(Double... scores) {
-        return Arrays.stream(scores).allMatch(Objects::nonNull);
-    }
-    
-    private String getCombinationName(String combinationCode) {
-        switch (combinationCode) {
-            case "A00": return "Toán, Vật lí, Hóa học";
-            case "A01": return "Toán, Vật lí, Tiếng Anh";
-            case "B00": return "Toán, Hóa học, Sinh học";
-            case "C00": return "Ngữ văn, Lịch sử, Địa lí";
-            case "C01": return "Ngữ văn, Toán, Vật lí";
-            case "C02": return "Ngữ văn, Toán, Hóa học";
-            case "C05": return "Ngữ văn, Vật lí, Hóa học";
-            case "D01": return "Ngữ văn, Toán, Tiếng Anh";
-            case "D07": return "Toán, Hóa học, Tiếng Anh";
-            default: return combinationCode;
-        }
-    }
-    
-    private Double calculateCombinationScore(StudentScore score, String combCode) {
-        switch (combCode) {
-            case "A00": // Toán, Lý, Hóa
-                return safeAdd(score.getScoreMath(), score.getScorePhysics(), score.getScoreChemistry());
-            case "A01": // Toán, Lý, Anh
-                return safeAdd(score.getScoreMath(), score.getScorePhysics(), score.getScoreEnglish());
-            case "B00": // Toán, Hóa, Sinh
-                return safeAdd(score.getScoreMath(), score.getScoreChemistry(), score.getScoreBiology());
-            case "C00": // Văn, Sử, Địa
-                return safeAdd(score.getScoreLiterature(), score.getScoreHistory(), score.getScoreGeography());
-            case "C01": // Văn, Toán, Lý
-                return safeAdd(score.getScoreLiterature(), score.getScoreMath(), score.getScorePhysics());
-            case "C02": // Văn, Toán, Hóa
-                return safeAdd(score.getScoreLiterature(), score.getScoreMath(), score.getScoreChemistry());
-            case "D01": // Văn, Toán, Anh
-                return safeAdd(score.getScoreLiterature(), score.getScoreMath(), score.getScoreEnglish());
-            case "D07": // Toán, Hóa, Anh
-                return safeAdd(score.getScoreMath(), score.getScoreChemistry(), score.getScoreEnglish());
-            default:
-                return null;
-        }
-    }
-    
-    private Double safeAdd(Double... scores) {
-        if (Arrays.stream(scores).anyMatch(Objects::nonNull)) {
-            return Arrays.stream(scores)
-                    .filter(Objects::nonNull)
-                    .mapToDouble(Double::doubleValue)
-                    .sum();
-        }
-        return null;
-    }
-    
-    private void estimateRankingData(CombinationScore combScore, Double totalScore, String combCode) {
-        try {
-            // Statistical estimation
-            double meanScore = getMeanScore(combCode);
-            double stdDev = 3.5;
-            int totalCandidates = getTotalCandidatesForCombination(combCode);
-            
-            double zScore = (totalScore - meanScore) / stdDev;
-            double percentile = Math.max(0.1, Math.min(99.9, 50 + 34.1 * zScore));
-            
-            int higherStudents = (int) ((100 - percentile) / 100.0 * totalCandidates);
-            
-            combScore.setStudentsWithHigherScore(Math.max(0, higherStudents));
-            combScore.setTotalStudentsInCombination(totalCandidates);
-            combScore.setStudentsWithSameScore((int) (totalCandidates * 0.002));
-            combScore.setEquivalentScore2024(totalScore + (Math.random() - 0.5) * 1.0);
-            
-        } catch (Exception e) {
-            log.debug("Error estimating ranking data: {}", e.getMessage());
-        }
-    }
-    
-    private double getMeanScore(String combination) {
-        switch (combination) {
-            case "A00": return 22.5;
-            case "A01": return 23.0;
-            case "B00": return 21.8;
-            case "C00": return 20.5;
-            case "C01": return 22.2;
-            case "C02": return 21.5;
-            case "D01": return 22.8;
-            case "D07": return 21.2;
-            default: return 21.0;
-        }
-    }
-    
-    private int getTotalCandidatesForCombination(String combination) {
-        switch (combination) {
-            case "A00": return 180000;
-            case "A01": return 160000;
-            case "B00": return 140000;
-            case "C00": return 120000;
-            case "C01": return 100000;
-            case "C02": return 110000;
-            case "D01": return 200000;
-            case "D07": return 90000;
-            default: return 100000;
-        }
-    }
-    
-    /**
-     * Format crawled data for response
-     */
-    private Map<String, Object> formatCrawledData(StudentScore studentScore, List<CombinationScore> combinationScores) {
+    private Map<String, Object> formatSuccessResponse(StudentScore studentScore, List<CombinationScore> combinationScores) {
         Map<String, Object> result = new HashMap<>();
         
         result.put("status", "found");
@@ -911,152 +736,114 @@ public class SeleniumSBDService {
         
         return result;
     }
-
-    /**
- * Extract điểm số từ bảng kết quả động
- */
-private Map<String, Double> extractScoresFromDynamicTable(WebDriver driver, WebElement resultsTable) {
-    Map<String, Double> scores = new HashMap<>();
     
-    try {
-        if (resultsTable == null) {
-            log.warn("⚠️ Results table is null, trying to find scores in page source");
-            return extractScoresFromSelenium(driver); // Fallback
+    // ===== COMBINATION HELPER METHODS =====
+    
+    private List<String> determineEligibleCombinations(StudentScore score) {
+        List<String> combinations = new ArrayList<>();
+        
+        // A00: Toán, Lý, Hóa
+        if (hasScores(score.getScoreMath(), score.getScorePhysics(), score.getScoreChemistry())) {
+            combinations.add("A00");
         }
         
-        log.info("🔍 Extracting scores from results table...");
-        
-        // Tìm tbody và các rows
-        List<WebElement> rows = resultsTable.findElements(By.tagName("tr"));
-        log.info("📋 Found {} rows in results table", rows.size());
-        
-        // Bắt đầu từ tr thứ 3 như bạn nói (index 2)
-        for (int i = 2; i < rows.size(); i++) {
-            try {
-                WebElement row = rows.get(i);
-                List<WebElement> cells = row.findElements(By.tagName("td"));
-                
-                if (cells.size() >= 2) {
-                    String cellText = row.getText().trim();
-                    log.debug("📝 Row {}: {}", i, cellText);
-                    
-                    // Extract scores từ text của row
-                    extractScoresFromRowText(cellText, scores);
-                }
-            } catch (Exception e) {
-                log.debug("Error processing row {}: {}", i, e.getMessage());
-            }
+        // A01: Toán, Lý, Anh
+        if (hasScores(score.getScoreMath(), score.getScorePhysics(), score.getScoreEnglish())) {
+            combinations.add("A01");
         }
         
-        // Nếu không tìm thấy từ table rows, thử extract từ toàn bộ table text
-        if (scores.isEmpty()) {
-            String tableText = resultsTable.getText();
-            log.info("🔍 Extracting from full table text: {}", 
-                    tableText.length() > 200 ? tableText.substring(0, 200) + "..." : tableText);
-            extractScoresFromTableText(tableText, scores);
+        // B00: Toán, Hóa, Sinh
+        if (hasScores(score.getScoreMath(), score.getScoreChemistry(), score.getScoreBiology())) {
+            combinations.add("B00");
         }
         
-        // Nếu vẫn không có, thử tìm trong các elements con
-        if (scores.isEmpty()) {
-            List<WebElement> allElements = resultsTable.findElements(By.xpath(".//*"));
-            for (WebElement element : allElements) {
-                String text = element.getText().trim();
-                if (!text.isEmpty() && text.matches(".*[0-9]+[\\.,][0-9]+.*")) {
-                    extractScoresFromRowText(text, scores);
-                }
-            }
+        // C00: Văn, Sử, Địa
+        if (hasScores(score.getScoreLiterature(), score.getScoreHistory(), score.getScoreGeography())) {
+            combinations.add("C00");
         }
         
-    } catch (Exception e) {
-        log.error("Error extracting scores from dynamic table: {}", e.getMessage(), e);
+        // D01: Văn, Toán, Anh
+        if (hasScores(score.getScoreLiterature(), score.getScoreMath(), score.getScoreEnglish())) {
+            combinations.add("D01");
+        }
+        
+        return combinations;
     }
     
-    log.info("✅ Extracted {} scores from dynamic table: {}", scores.size(), scores);
-    return scores;
-}
-
-    /**
-     * Extract scores từ text của một row
-     */
-    private void extractScoresFromRowText(String rowText, Map<String, Double> scores) {
-        if (rowText == null || rowText.trim().isEmpty()) return;
-        
-        try {
-            // Tìm patterns như "Môn Toán: 4.75" trong row text
-            String lowerText = rowText.toLowerCase();
-            
-            // Patterns dựa trên screenshot: "Môn Toán: 4.75"
-            String[] subjectPatterns = {
-                "môn toán", "toán", 
-                "môn văn", "văn", "ngữ văn",
-                "môn lý", "lý", "vật lí", "vật lí", 
-                "môn hóa", "hóa", "hóa học",
-                "môn anh", "anh", "tiếng anh",
-                "môn sinh", "sinh", "sinh học", 
-                "môn sử", "sử", "lịch sử",
-                "môn địa", "địa", "địa lí"
-            };
-            
-            for (String pattern : subjectPatterns) {
-                if (lowerText.contains(pattern)) {
-                    // Tìm số sau pattern
-                    String regex = pattern.replace(" ", "\\s*") + "\\s*[:\\-]?\\s*([0-9]+[\\.,]?[0-9]*)";
-                    java.util.regex.Pattern p = java.util.regex.Pattern.compile(regex, java.util.regex.Pattern.CASE_INSENSITIVE);
-                    java.util.regex.Matcher m = p.matcher(rowText);
-                    
-                    if (m.find()) {
-                        try {
-                            String scoreStr = m.group(1).replace(",", ".");
-                            double score = Double.parseDouble(scoreStr);
-                            if (score >= 0 && score <= 10) {
-                                // Map to standard subject names
-                                String subjectKey = mapToSubjectKey(pattern);
-                                if (subjectKey != null && !scores.containsKey(subjectKey)) {
-                                    scores.put(subjectKey, score);
-                                    log.debug("✅ Found score: {} = {}", subjectKey, score);
-                                }
-                            }
-                        } catch (NumberFormatException e) {
-                            log.debug("Could not parse score: {}", m.group(1));
-                        }
-                    }
-                    break; // Đã xử lý pattern này, chuyển sang row khác
-                }
-            }
-        } catch (Exception e) {
-            log.debug("Error extracting from row text: {}", e.getMessage());
+    private boolean hasScores(Double... scores) {
+        return Arrays.stream(scores).allMatch(Objects::nonNull);
+    }
+    
+    private String getCombinationName(String combinationCode) {
+        switch (combinationCode) {
+            case "A00": return "Toán, Vật lí, Hóa học";
+            case "A01": return "Toán, Vật lí, Tiếng Anh";
+            case "B00": return "Toán, Hóa học, Sinh học";
+            case "C00": return "Ngữ văn, Lịch sử, Địa lí";
+            case "D01": return "Ngữ văn, Toán, Tiếng Anh";
+            default: return combinationCode;
         }
     }
-
-    /**
-     * Extract scores từ toàn bộ table text
-     */
-    private void extractScoresFromTableText(String tableText, Map<String, Double> scores) {
-        // Split thành lines và extract
-        String[] lines = tableText.split("\\n");
-        for (String line : lines) {
-            if (line.toLowerCase().contains("môn") && line.matches(".*[0-9]+[\\.,][0-9]+.*")) {
-                extractScoresFromRowText(line, scores);
-            }
+    
+    private Double calculateCombinationScore(StudentScore score, String combCode) {
+        switch (combCode) {
+            case "A00": return safeAdd(score.getScoreMath(), score.getScorePhysics(), score.getScoreChemistry());
+            case "A01": return safeAdd(score.getScoreMath(), score.getScorePhysics(), score.getScoreEnglish());
+            case "B00": return safeAdd(score.getScoreMath(), score.getScoreChemistry(), score.getScoreBiology());
+            case "C00": return safeAdd(score.getScoreLiterature(), score.getScoreHistory(), score.getScoreGeography());
+            case "D01": return safeAdd(score.getScoreLiterature(), score.getScoreMath(), score.getScoreEnglish());
+            default: return null;
         }
     }
-
-    /**
-     * Map pattern to standard subject key
-     */
-    private String mapToSubjectKey(String pattern) {
-        String lowerPattern = pattern.toLowerCase();
-        
-        if (lowerPattern.contains("toán")) return "toán";
-        if (lowerPattern.contains("văn")) return "văn";
-        if (lowerPattern.contains("lý")) return "lý";
-        if (lowerPattern.contains("hóa")) return "hóa";
-        if (lowerPattern.contains("anh")) return "anh";
-        if (lowerPattern.contains("sinh")) return "sinh";
-        if (lowerPattern.contains("sử")) return "sử";
-        if (lowerPattern.contains("địa")) return "địa";
-        
+    
+    private Double safeAdd(Double... scores) {
+        if (Arrays.stream(scores).anyMatch(Objects::isNull)) {
         return null;
+        }
+        return Arrays.stream(scores).mapToDouble(Double::doubleValue).sum();
     }
-
+    
+    private void estimateRankingData(CombinationScore combScore, Double totalScore, String combCode) {
+        try {
+            // Statistical estimation based on Vietnamese exam data
+            double meanScore = getMeanScore(combCode);
+            double stdDev = 3.5;
+            int totalCandidates = getTotalCandidatesForCombination(combCode);
+            
+            double zScore = (totalScore - meanScore) / stdDev;
+            double percentile = Math.max(0.1, Math.min(99.9, 50 + 34.1 * zScore));
+            
+            int higherStudents = (int) ((100 - percentile) / 100.0 * totalCandidates);
+            
+            combScore.setStudentsWithHigherScore(Math.max(0, higherStudents));
+            combScore.setTotalStudentsInCombination(totalCandidates);
+            combScore.setStudentsWithSameScore((int) (totalCandidates * 0.002));
+            combScore.setEquivalentScore2024(totalScore + (Math.random() - 0.5) * 1.0);
+            
+        } catch (Exception e) {
+            log.debug("Lỗi estimate ranking: {}", e.getMessage());
+        }
+    }
+    
+    private double getMeanScore(String combination) {
+        switch (combination) {
+            case "A00": return 22.5;
+            case "A01": return 23.0;
+            case "B00": return 21.8;
+            case "C00": return 20.5;
+            case "D01": return 22.8;
+            default: return 21.0;
+        }
+    }
+    
+    private int getTotalCandidatesForCombination(String combination) {
+        switch (combination) {
+            case "A00": return 180000;
+            case "A01": return 160000;
+            case "B00": return 140000;
+            case "C00": return 120000;
+            case "D01": return 200000;
+            default: return 100000;
+        }
+    }
 }       

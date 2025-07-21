@@ -172,18 +172,18 @@ public class TuyenSinh247CrawlerService {
                                  Map<String, Program> programMap, 
                                  Integer year, String method) {
         
-        Elements rows = table.select("tbody tr");
-        if (rows.isEmpty()) {
-            rows = table.select("tr");
-        }
+            Elements rows = table.select("tbody tr");
+            if (rows.isEmpty()) {
+                rows = table.select("tr");
+            }
         
         int processedRows = 0;
         int scoreRows = 0;
-        
-        for (Element row : rows) {
-            Elements cells = row.select("td");
             
-            if (cells.size() >= 3) {
+            for (Element row : rows) {
+                Elements cells = row.select("td");
+            
+                if (cells.size() >= 3) {
                 String programName = cells.get(0).text().trim();
                 String combination = cells.get(1).text().trim();
                 String scoreText = cells.get(2).text().trim();
@@ -550,7 +550,7 @@ public class TuyenSinh247CrawlerService {
     private void updateExistingUniversity(University existing, University newData) {
         existing.setName(newData.getName());
         existing.setFullName(newData.getFullName());
-        existing.setLocation(newData.getLocation());
+            existing.setLocation(newData.getLocation());
         
         Map<String, Program> existingProgramsMap = new HashMap<>();
         for (Program p : existing.getPrograms()) {

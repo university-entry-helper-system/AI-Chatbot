@@ -14,7 +14,7 @@ public interface ProgramRepository extends JpaRepository<Program, Long> {
     List<Program> findByNameContainingIgnoreCase(String name);
 
     List<Program> findByUniversityId(Long universityId);
-    
+
     List<Program> findByNameContainingIgnoreCaseOrCodeContainingIgnoreCase(String name, String code);
 
     @Query("SELECT p FROM Program p WHERE p.benchmarkScore2024 BETWEEN :minScore AND :maxScore")
