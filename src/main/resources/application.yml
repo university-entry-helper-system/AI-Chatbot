@@ -11,40 +11,71 @@ spring:
   jpa:
     hibernate:
       ddl-auto: update
-    show-sql: true
+    show-sql: false # Set false để giảm log
     properties:
       hibernate:
         dialect: org.hibernate.dialect.MySQL8Dialect
-        format_sql: true
+        format_sql: false
 
   web:
     cors:
-      allowed-origins: "http://localhost:3000"
+      allowed-origins: "*" # Cho phép tất cả origins cho demo
       allowed-methods: "*"
       allowed-headers: "*"
       allow-credentials: true
 
 server:
-  port: 8080
+  port: 8081
 
+# OpenAI Configuration
+openai:
+  api:
+    key: ${OPENAI_API_KEY:your-api-key-here}
+    url: https://api.openai.com/v1/chat/completions
+    model: gpt-4.1
+    max-tokens: 150
+    temperature: 0.5
+
+# Cost Management - Adjusted for GPT-4
+chatgpt:
+  budget:
+    total: 10.0
+    warning-threshold: 6.0 # Warn earlier with GPT-4
+    critical-threshold: 8.5 # Critical earlier with GPT-4
+  cache:
+    enabled: true
+    max-size: 2000 # More cache for GPT-4
+    ttl-hours: 48 # Longer cache for expensive model
+
+# Rate Limiting
+api:
+  rate-limit:
+    requests-per-minute: 60
+    requests-per-hour: 1000
+
+# Logging
 logging:
   level:
-    com.example.educationchatbot: DEBUG
-    org.hibernate.SQL: DEBUG
+    com.khoipd8.educationchatbot: INFO
+    org.hibernate.SQL: WARN
+    org.springframework.web: INFO
+    root: INFO
+  pattern:
+    console: "%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
 
-# Crawler settings
+# Crawler settings (existing)
 crawler:
   base-url: https://diemthi.tuyensinh247.com
   delay-ms: 1000
   timeout-ms: 15000
   batch-size: 50
 
-# RAG settings
-rag:
-  ollama:
-    url: http://localhost:11434
-    model: gemma2:2b
-  chromadb:
-    path: ./chroma_db
-  embedding:
-    model: keepitreal/vietnamese-sbert
+springdoc:
+  api-docs:
+    enabled: true
+    path: /v3/api-docs
+  swagger-ui:
+    enabled: true
+    path: /swagger-ui.html
+    display-request-duration: true
+    tryItOutEnabled: true
