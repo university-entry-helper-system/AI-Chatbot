@@ -130,6 +130,15 @@ public class ChatGPTRAGService {
         Map.entry("civic education", "scoreCivicEducation")
     );
 
+    // Normalize string: lower case, remove accents, remove extra spaces
+    private String normalizeForSBD(String input) {
+        if (input == null) return "";
+        String lower = input.toLowerCase();
+        String noAccent = java.text.Normalizer.normalize(lower, java.text.Normalizer.Form.NFD)
+            .replaceAll("\\p{InCombiningDiacriticalMarks}+", "");
+        return noAccent.replaceAll("\\s+", " ").trim();
+    }
+
     /**
      * 🤖 MAIN METHOD - Generate response using RestTemplate
      */
@@ -212,70 +221,114 @@ public class ChatGPTRAGService {
             boolean containsSbdKeyword = SBD_KEYWORDS.stream().anyMatch(normalizedQuery::contains);
             if (containsSbdKeyword) {
                 log.info("🔍 SBD-related query detected: {}", userQuery);
-                List<String> potentialSBDs = extractSBDNumbers(userQuery);
-                if (!potentialSBDs.isEmpty()) {
-                    String sbd = potentialSBDs.get(0);
-                    log.info("📋 Extracted SBD: {}", sbd);
-                    if (!isValidSBD(sbd)) {
-                        log.warn("❌ Invalid SBD detected: {}", sbd);
-                        response.put("answer", "Số báo danh '" + sbd + "' không hợp lệ. SBD phải có 8-10 chữ số và khác '0'. Vui lòng kiểm tra lại.");
-                        response.put("status", "invalid_sbd");
-                        response.put("session_id", sessionId);
-                        response.put("detected_sbd", sbd);
-                        return response;
+                // Only accept SBDs that are exactly 8 digits
+                Pattern sbdPattern = Pattern.compile("\\b(\\d{8})\\b");
+                Matcher matcher = sbdPattern.matcher(userQuery);
+                if (!matcher.find()) {
+                    response.put("answer", "Số báo danh không hợp lệ hoặc không tồn tại trong hệ thống, vui lòng kiểm tra lại.");
+                    response.put("status", "invalid_sbd");
+                    response.put("session_id", sessionId);
+                    return response;
+                }
+                String sbd = matcher.group(1).trim();
+                log.info("📋 Extracted SBD: {}", sbd);
+                if (!isValidSBD(sbd)) {
+                    log.warn("❌ Invalid SBD detected: {}", sbd);
+                    response.put("answer", "Số báo danh '" + sbd + "' không hợp lệ. SBD phải có 8-10 chữ số và khác '0'. Vui lòng kiểm tra lại.");
+                    response.put("status", "invalid_sbd");
+                    response.put("session_id", sessionId);
+                    response.put("detected_sbd", sbd);
+                    return response;
+                }
+                // Subject-specific logic
+                String subjectKey = null;
+                String subjectName = null;
+                for (String keyword : SUBJECT_KEYWORDS.keySet()) {
+                    if (normalizedQuery.contains(normalizeForSBD(keyword))) {
+                        subjectKey = SUBJECT_KEYWORDS.get(keyword);
+                        subjectName = keyword;
+                        break;
                     }
-                    // Subject-specific logic
-                    String subjectKey = null;
-                    String subjectName = null;
-                    for (String keyword : SUBJECT_KEYWORDS.keySet()) {
-                        if (normalizedQuery.contains(keyword)) {
-                            subjectKey = SUBJECT_KEYWORDS.get(keyword);
-                            subjectName = keyword;
-                            break;
+                }
+                if (subjectKey != null) {
+                    Optional<StudentScore> scoreOpt = studentScoreRepository.findBySbd(sbd);
+                    if (scoreOpt.isPresent()) {
+                        StudentScore score = scoreOpt.get();
+                        Double subjectScore = null;
+                        switch (subjectKey) {
+                            case "scoreMath": subjectScore = score.getScoreMath(); break;
+                            case "scoreLiterature": subjectScore = score.getScoreLiterature(); break;
+                            case "scoreEnglish": subjectScore = score.getScoreEnglish(); break;
+                            case "scorePhysics": subjectScore = score.getScorePhysics(); break;
+                            case "scoreChemistry": subjectScore = score.getScoreChemistry(); break;
+                            case "scoreBiology": subjectScore = score.getScoreBiology(); break;
+                            case "scoreHistory": subjectScore = score.getScoreHistory(); break;
+                            case "scoreGeography": subjectScore = score.getScoreGeography(); break;
+                            case "scoreCivicEducation": subjectScore = score.getScoreCivicEducation(); break;
                         }
-                    }
-                    if (subjectKey != null) {
-                        Optional<StudentScore> scoreOpt = studentScoreRepository.findBySbd(sbd);
-                        if (scoreOpt.isPresent()) {
-                            StudentScore score = scoreOpt.get();
-                            Double subjectScore = null;
-                            switch (subjectKey) {
-                                case "scoreMath": subjectScore = score.getScoreMath(); break;
-                                case "scoreLiterature": subjectScore = score.getScoreLiterature(); break;
-                                case "scoreEnglish": subjectScore = score.getScoreEnglish(); break;
-                                case "scorePhysics": subjectScore = score.getScorePhysics(); break;
-                                case "scoreChemistry": subjectScore = score.getScoreChemistry(); break;
-                                case "scoreBiology": subjectScore = score.getScoreBiology(); break;
-                                case "scoreHistory": subjectScore = score.getScoreHistory(); break;
-                                case "scoreGeography": subjectScore = score.getScoreGeography(); break;
-                                case "scoreCivicEducation": subjectScore = score.getScoreCivicEducation(); break;
+                        Map<String, Object> resp = new HashMap<>();
+                        if (subjectScore != null) {
+                            resp.put("answer", String.format("Điểm %s của SBD %s là: %.2f", subjectName, sbd, subjectScore));
+                            resp.put("status", "success");
+                        } else {
+                            resp.put("answer", String.format("Chưa có điểm %s cho SBD %s.", subjectName, sbd));
+                            resp.put("status", "not_found");
+                        }
+                        resp.put("session_id", sessionId);
+                        resp.put("sbd", sbd);
+                        return resp;
+                    } else {
+                        // Auto-insert: Call lookup API, poll DB for up to 5 seconds
+                        String apiUrl = String.format("http://localhost:8081/api/sbd/lookup-api/%s?region=To%%C3%%A0n%%20qu%%E1%%BB%%91c", sbd);
+                        try { restTemplate.getForObject(apiUrl, String.class); } catch (Exception e) {}
+                        StudentScore foundScore = null;
+                        for (int i = 0; i < 5; i++) {
+                            Optional<StudentScore> scoreOpt2 = studentScoreRepository.findBySbd(sbd);
+                            if (scoreOpt2.isPresent()) {
+                                foundScore = scoreOpt2.get();
+                                break;
                             }
-                            Map<String, Object> resp = new HashMap<>();
-                            if (subjectScore != null) {
-                                resp.put("answer", String.format("Điểm %s của SBD %s là: %.2f", subjectName, sbd, subjectScore));
-                                resp.put("status", "success");
-                            } else {
-                                resp.put("answer", String.format("Chưa có điểm %s cho SBD %s.", subjectName, sbd));
-                                resp.put("status", "not_found");
-                            }
-                            resp.put("session_id", sessionId);
-                            resp.put("sbd", sbd);
-                            return resp;
+                            try { Thread.sleep(1000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
+                        }
+                        if (foundScore != null) {
+                            return formatScoreResponse(foundScore, sessionId);
                         } else {
                             Map<String, Object> resp = new HashMap<>();
-                            resp.put("answer", String.format("Số báo danh '%s' hiện chưa có trong hệ thống. Vui lòng kiểm tra lại hoặc thử lại sau ít phút. Nếu cần hỗ trợ, hãy liên hệ CTV.", sbd));
+                            resp.put("answer", String.format("Số báo danh '%s' không tồn tại trên hệ thống, vui lòng thử SBD khác hoặc thử lại sau ít phút.", sbd));
                             resp.put("status", "not_found");
                             resp.put("session_id", sessionId);
                             resp.put("searched_sbd", sbd);
                             return resp;
                         }
                     }
+                }
+                // If not subject-specific, always check SBD existence and return immediately if not found
+                Optional<StudentScore> scoreOpt = studentScoreRepository.findBySbd(sbd);
+                if (scoreOpt.isPresent()) {
+                    return formatScoreResponse(scoreOpt.get(), sessionId);
                 } else {
-                    log.warn("⚠️ SBD keyword found but no valid number in query: {}", userQuery);
-                    response.put("answer", "Vui lòng cung cấp số báo danh hợp lệ (8-10 chữ số). Ví dụ: 'SBD 12345678' hoặc 'số báo danh 123456789'");
-                    response.put("status", "missing_sbd");
-                    response.put("session_id", sessionId);
-                    return response;
+                    // Auto-insert: Call lookup API, poll DB for up to 5 seconds
+                    String apiUrl = String.format("http://localhost:8081/api/sbd/lookup-api/%s?region=To%%C3%%A0n%%20qu%%E1%%BB%%91c", sbd);
+                    try { restTemplate.getForObject(apiUrl, String.class); } catch (Exception e) {}
+                    StudentScore foundScore = null;
+                    for (int i = 0; i < 5; i++) {
+                        Optional<StudentScore> scoreOpt2 = studentScoreRepository.findBySbd(sbd);
+                        if (scoreOpt2.isPresent()) {
+                            foundScore = scoreOpt2.get();
+                            break;
+                        }
+                        try { Thread.sleep(1000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
+                    }
+                    if (foundScore != null) {
+                        return formatScoreResponse(foundScore, sessionId);
+                    } else {
+                        Map<String, Object> resp = new HashMap<>();
+                        resp.put("answer", String.format("Số báo danh '%s' không tồn tại trên hệ thống, vui lòng thử SBD khác hoặc thử lại sau ít phút.", sbd));
+                        resp.put("status", "not_found");
+                        resp.put("session_id", sessionId);
+                        resp.put("searched_sbd", sbd);
+                        return resp;
+                    }
                 }
             }
             
@@ -975,11 +1028,26 @@ public class ChatGPTRAGService {
             if (foundScore != null) {
                 return formatScoreResponse(foundScore, sessionId);
             } else {
-                response.put("answer", String.format("Số báo danh '%s' hiện chưa có trong hệ thống. Vui lòng kiểm tra lại hoặc thử lại sau ít phút. Nếu cần hỗ trợ, hãy liên hệ CTV.", sbd));
-                response.put("status", "not_found");
-                response.put("session_id", sessionId);
-                response.put("searched_sbd", sbd);
-                return response;
+                // Call lookup API, then poll DB for another 5 seconds
+                String apiUrl = String.format("http://localhost:8081/api/sbd/lookup-api/%s?region=To%%C3%%A0n%%20qu%%E1%%BB%%91c", sbd);
+                try { restTemplate.getForObject(apiUrl, String.class); } catch (Exception e) {}
+                for (int i = 0; i < 5; i++) {
+                    Optional<StudentScore> scoreOpt2 = studentScoreRepository.findBySbd(sbd);
+                    if (scoreOpt2.isPresent()) {
+                        foundScore = scoreOpt2.get();
+                        break;
+                    }
+                    try { Thread.sleep(1000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
+                }
+                if (foundScore != null) {
+                    return formatScoreResponse(foundScore, sessionId);
+                } else {
+                    response.put("answer", String.format("Số báo danh '%s' không tồn tại trên hệ thống, vui lòng thử SBD khác hoặc thử lại sau ít phút.", sbd));
+                    response.put("status", "not_found");
+                    response.put("session_id", sessionId);
+                    response.put("searched_sbd", sbd);
+                    return response;
+                }
             }
         } catch (Exception e) {
             response.put("answer", "Đã xảy ra lỗi khi tra cứu số báo danh. Vui lòng thử lại sau.");
